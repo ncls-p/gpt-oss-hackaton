@@ -1,10 +1,9 @@
+import getpass
 import os
+import platform
 import re
 from typing import Callable, TypedDict, cast
 
-# If the user keeps credentials in a .env file, prefer to load it when the
-# optional dependency is available. We do this lazily at import time so the
-# package remains usable without python-dotenv installed.
 try:
     from dotenv import load_dotenv
 
@@ -35,11 +34,9 @@ class FunctionCallingOpenAIAdapter(FunctionCallingLLMPort):
     api_base: str | None
 
     def __init__(self, model: str | None = None):
-        # Allow environment override for model name
         env_model = os.environ.get("OPENAI_MODEL")
         self.model = env_model if env_model else (model or "gpt-4o-mini")
         self.api_key = os.environ.get("OPENAI_API_KEY")
-        # Allow custom API base/url via OPENAI_API_BASE (legacy), OPENAI_BASE_URL (OpenAI SDK v1), or OPENAI_API_URL
         self.api_base = (
             os.environ.get("OPENAI_API_BASE")
             or os.environ.get("OPENAI_BASE_URL")
@@ -53,18 +50,14 @@ class FunctionCallingOpenAIAdapter(FunctionCallingLLMPort):
                 "OPENAI_API_KEY is not set. Function-calling adapter requires OpenAI credentials."
             )
 
-        # Instantiate OpenAI client with explicit parameters so base_url is honored (e.g., OpenRouter)
-        # Prefer constructor args; also set env fallbacks for downstream libs.
         if self.api_base:
             _ = os.environ.setdefault("OPENAI_BASE_URL", self.api_base)
             _ = os.environ.setdefault("OPENAI_API_BASE", self.api_base)
         if self.api_key:
             _ = os.environ.setdefault("OPENAI_API_KEY", self.api_key)
 
-        # Add OpenRouter-friendly headers if using OpenRouter (optional but recommended)
         default_headers: dict[str, str] | None = None
         if self.api_base and "openrouter.ai" in self.api_base:
-            # Respect optional env overrides
             referer = os.environ.get("OPENROUTER_HTTP_REFERER")
             title = os.environ.get("OPENROUTER_X_TITLE")
             default_headers = {
@@ -101,10 +94,46 @@ class FunctionCallingOpenAIAdapter(FunctionCallingLLMPort):
                 },
             }
         ]
+        sys_parts: list[str] = []
+        try:
+            sys_parts.append(
+                f"OS: {platform.system()} {platform.release()} {platform.version()}"
+            )
+        except Exception:
+            pass
+        try:
+            sys_parts.append(f"Architecture: {platform.machine()}")
+        except Exception:
+            pass
+        try:
+            proc = platform.processor()
+            if proc:
+                sys_parts.append(f"Processor: {proc}")
+        except Exception:
+            pass
+        try:
+            sys_parts.append(f"Python: {platform.python_version()}")
+        except Exception:
+            pass
+        try:
+            sys_parts.append(f"User: {getpass.getuser()}")
+        except Exception:
+            pass
+        try:
+            cwd = os.getcwd()
+            sys_parts.append(f"CWD: {cwd}")
+        except Exception:
+            pass
+
+        system_info_str = "; ".join([p for p in sys_parts if p])
+
         messages: list[ChatCompletionMessageParam] = [
             {
                 "role": "system",
-                "content": "Extract only one directory path for listing. If unclear, default to '.'",
+                "content": (
+                    f"System info: {system_info_str}\n\n"
+                    "Extract only one directory path for listing. If unclear, default to '.'"
+                ),
             },
             {"role": "user", "content": user_input},
         ]
@@ -122,7 +151,6 @@ class FunctionCallingOpenAIAdapter(FunctionCallingLLMPort):
         )
         model_dump = getattr(resp, "model_dump", None)
         if not callable(model_dump):
-            # Response object doesn't expose model_dump: fail loudly.
             raise RuntimeError(
                 "OpenAI response object missing model_dump(); incompatible OpenAI client version"
             )

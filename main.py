@@ -1,15 +1,14 @@
-from gpt_oss_hackathon.adapters.fs_adapter import LocalFSAdapter
-from gpt_oss_hackathon.adapters.llm_adapter import create_llm_adapter
 from gpt_oss_hackathon.adapters.fn_llm_adapter import (
     create_function_calling_llm_adapter,
 )
+from gpt_oss_hackathon.adapters.fs_adapter import LocalFSAdapter
+from gpt_oss_hackathon.adapters.llm_adapter import create_llm_adapter
 from gpt_oss_hackathon.usecases import LsUseCase, NaturalLanguageListUseCase
 
 
 def main():
     import sys
 
-    # Ensure .env is loaded early if present
     try:
         from dotenv import load_dotenv
 
@@ -17,9 +16,6 @@ def main():
     except Exception:
         pass
 
-    # Modes:
-    # - default: expects "ls <path>" (structured)
-    # - --nl: natural language, e.g. "list the files in /Users/me"
     use_nl = False
     argv = [a for a in sys.argv[1:] if a != "--nl"]
     if len(sys.argv) > 1 and "--nl" in sys.argv[1:]:
@@ -27,7 +23,6 @@ def main():
 
     fs = LocalFSAdapter()
     user_input = " ".join(argv) if argv else input("Enter command or query: ")
-    # Auto-switch to NL mode if the input doesn't start with 'ls'
     if not user_input.strip().startswith("ls"):
         use_nl = True
     if use_nl:

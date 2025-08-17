@@ -19,6 +19,5 @@ class OpenAIAdapter:
         return Command(user_input)
 
 
-# Provide a factory that callers can use in wiring without depending on openai at import time
 def create_llm_adapter() -> OpenAIAdapter:
     return OpenAIAdapter()

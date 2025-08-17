@@ -19,7 +19,6 @@ class Command:
         return self.raw.startswith("ls")
 
     def target_path(self) -> str:
-        # naive parsing: 'ls <path>' or 'ls' -> '.'
         parts = self.raw.split(maxsplit=1)
         if len(parts) == 1:
             return "."

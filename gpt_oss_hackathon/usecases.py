@@ -1,5 +1,5 @@
 from .domain import Command, LsResult
-from .ports import FileSystemPort, LLMPort, FunctionCallingLLMPort
+from .ports import FileSystemPort, FunctionCallingLLMPort, LLMPort
 
 
 class LsUseCase:
