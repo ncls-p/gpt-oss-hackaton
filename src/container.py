@@ -6,9 +6,12 @@ from adapters.files.local_fs_adapter import LocalFileSystemAdapter
 from adapters.llm.openai_adapter import OpenAIAdapter
 from ports.files.file_repository_port import FileRepositoryPort
 from ports.llm.llm_port import LLMPort
+from ports.llm.tools_port import ToolsHandlerPort  # nouveau
 from use_cases.files.list_files import ListFilesUseCase
 from use_cases.files.search_files import SearchFilesUseCase
 from use_cases.llm.generate_text import GenerateTextUseCase
+from use_cases.tools.files_tools import FilesToolsHandler  # nouveau
+from adapters.llm.openai_tools_adapter import OpenAIToolsAdapter  # nouveau
 
 
 class DependencyContainer:
@@ -78,6 +81,25 @@ class DependencyContainer:
             llm_adapter = self.get_llm_adapter()
             self._instances["generate_text_use_case"] = GenerateTextUseCase(llm_adapter)
         return self._instances["generate_text_use_case"]
+
+    def get_files_tools_handler(self) -> ToolsHandlerPort:
+        """
+        Registre des tools 'files.*' adossé aux use cases Files.
+        """
+        if "files_tools_handler" not in self._instances:
+            list_uc = self.get_list_files_use_case()
+            search_uc = self.get_search_files_use_case()
+            self._instances["files_tools_handler"] = FilesToolsHandler(list_uc, search_uc)
+        return self._instances["files_tools_handler"]
+
+    def get_llm_tools_adapter(self) -> LLMPort:
+        """
+        Adapter LLM avec support des tools (function-calling).
+        """
+        if "llm_tools_adapter" not in self._instances:
+            tools_handler = self.get_files_tools_handler()
+            self._instances["llm_tools_adapter"] = OpenAIToolsAdapter(tools_handler=tools_handler)
+        return self._instances["llm_tools_adapter"]
 
     def reset(self):
         """Reset all instances (useful for testing)."""
