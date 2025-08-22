@@ -3,7 +3,9 @@ File domain entity.
 """
 
 import os
-from typing import Dict, Any
+from typing import Any
+
+from exceptions import FileRepositoryError
 
 
 class File:
@@ -19,17 +21,16 @@ class File:
             path: Absolute path to the file
 
         Raises:
-            ValueError: If path is invalid
-            FileNotFoundError: If file doesn't exist
+            FileRepositoryError: If path is invalid or file doesn't exist
         """
         if not path or not isinstance(path, str):
-            raise ValueError("Path must be a non-empty string")
+            raise FileRepositoryError("Path must be a non-empty string")
 
         if not os.path.exists(path):
-            raise FileNotFoundError(f"File does not exist: {path}")
+            raise FileRepositoryError(f"File does not exist: {path}")
 
         if not os.path.isfile(path):
-            raise ValueError(f"Path is not a file: {path}")
+            raise FileRepositoryError(f"Path is not a file: {path}")
 
         self.path = os.path.abspath(path)
         self.name = self._find_file_name()
@@ -45,14 +46,14 @@ class File:
         try:
             return os.path.getsize(self.path)
         except OSError as e:
-            raise ValueError(f"Cannot get file size: {e}")
+            raise FileRepositoryError(f"Cannot get file size: {e}")
 
     def _find_file_type(self) -> str:
         """Extract the file extension."""
         _, ext = os.path.splitext(self.path)
         return ext.lstrip(".") if ext else "no_extension"
 
-    def get_details(self) -> Dict[str, Any]:
+    def get_details(self) -> dict[str, Any]:
         """
         Get comprehensive file details.
 

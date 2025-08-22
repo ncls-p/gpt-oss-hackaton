@@ -3,10 +3,13 @@ Configuration settings for the application.
 """
 
 import os
+
 from dotenv import load_dotenv
 
+from exceptions import ConfigurationError
+
 # Load environment variables from .env file
-load_dotenv()
+_ = load_dotenv()
 
 
 class Settings:
@@ -23,7 +26,7 @@ class Settings:
         """Get a required environment variable, raise error if missing."""
         value = os.getenv(key)
         if not value:
-            raise ValueError(f"Required environment variable {key} is not set")
+            raise ConfigurationError(f"Required environment variable {key} is not set")
         return value
 
     def _get_env(self, key: str, default: str) -> str:

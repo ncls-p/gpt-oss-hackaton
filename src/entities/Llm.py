@@ -2,7 +2,9 @@
 LLM domain entity.
 """
 
-from typing import Dict, Any, Optional
+from typing import Any, Optional
+
+from exceptions import LLMError
 from ports.llm.llm_port import LLMPort
 
 
@@ -47,15 +49,17 @@ class Llm:
             Generated text response
 
         Raises:
-            ValueError: If prompt is empty or None
-            LLMError: If text generation fails
+            LLMError: If prompt is empty or None or if text generation fails
         """
         if not prompt or not isinstance(prompt, str):
-            raise ValueError("Prompt must be a non-empty string")
+            raise LLMError("Prompt must be a non-empty string")
 
-        return self._llm_adapter.generate_response(prompt, **kwargs)
+        try:
+            return self._llm_adapter.generate_response(prompt, **kwargs)
+        except Exception as e:
+            raise LLMError(f"Failed to generate text: {str(e)}")
 
-    def get_model_info(self) -> Dict[str, Any]:
+    def get_model_info(self) -> dict[str, Any]:
         """
         Get information about the current LLM configuration.
 
@@ -63,9 +67,11 @@ class Llm:
             Dictionary with model configuration details
         """
         # Check if adapter has get_model_info method
-        try:
+        if hasattr(self._llm_adapter, "get_model_info") and callable(
+            getattr(self._llm_adapter, "get_model_info")
+        ):
             return self._llm_adapter.get_model_info()
-        except AttributeError:
+        else:
             # Fallback to basic info
             return {
                 "api_key": self.api_key[:10] + "..." if self.api_key else None,

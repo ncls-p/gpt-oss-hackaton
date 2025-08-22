@@ -9,3 +9,12 @@ dependencies = [
     "python-dotenv>=1.1.1",
     "typing-extensions>=4.7",
 ]
+
+[dependency-groups]
+dev = [
+    "basedpyright>=1.31.3",
+    "pytest>=8.4.1",
+    "pytest-cov>=6.2.1",
+    "pytest-mock>=3.14.1",
+    "ruff>=0.12.10",
+]
