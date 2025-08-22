@@ -9,6 +9,7 @@ A Python application demonstrating Clean Architecture principles with file opera
 - **Clean Architecture**: Proper layered architecture with dependency inversion
 - **Tool Integration**: LLM-powered file management tools
 - **Comprehensive Testing**: Full test suite with pytest
+- **HTTP API**: RESTful API endpoints for all functionality
 
 ## Installation
 
@@ -63,6 +64,10 @@ A Python application demonstrating Clean Architecture principles with file opera
 
 ### Running the Application
 
+The application can be used in two ways:
+
+#### CLI Interface
+
 Execute the main CLI entrypoint:
 
 ```bash
@@ -71,9 +76,21 @@ python src/main.py
 
 This will run demonstrations of both file operations and LLM text generation capabilities.
 
+#### HTTP API Server
+
+Start the FastAPI server:
+
+```bash
+uv run uvicorn src.main:app --reload
+```
+
+The API will be available at `http://localhost:8000` and interactive documentation at `http://localhost:8000/docs`.
+
 ### Examples
 
-#### File Operations
+#### CLI Usage
+
+##### File Operations
 
 The application can list and search files in directories:
 
@@ -88,7 +105,7 @@ python src/main.py
 # - Proper error handling for file operations
 ```
 
-#### Text Generation
+##### Text Generation
 
 The application includes LLM-powered text generation:
 
@@ -102,6 +119,112 @@ python src/main.py
 # - System message customization
 # - Token limit management
 # - Error handling for LLM operations
+```
+
+#### API Usage
+
+##### List Files
+
+```bash
+curl -X GET "http://localhost:8000/files?directory=/path/to/directory"
+```
+
+Example response:
+
+```json
+{
+  "files": [
+    {
+      "name": "example.py",
+      "path": "/path/to/directory/example.py",
+      "size_mb": 0.1,
+      "type": "py"
+    }
+  ]
+}
+```
+
+##### Search Files
+
+```bash
+curl -X GET "http://localhost:8000/files/search?directory=/path/to/directory&pattern=*.py"
+```
+
+For recursive search:
+
+```bash
+curl -X GET "http://localhost:8000/files/search?directory=/path/to/directory&pattern=*.py&recursive=true"
+```
+
+Example response:
+
+```json
+{
+  "files": [
+    {
+      "name": "example.py",
+      "path": "/path/to/directory/example.py",
+      "size_mb": 0.1,
+      "type": "py"
+    }
+  ]
+}
+```
+
+##### Generate Text
+
+```bash
+curl -X POST "http://localhost:8000/generate-text" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "prompt": "Write a haiku about programming",
+    "temperature": 0.7,
+    "max_tokens": 1000
+  }'
+```
+
+With system message:
+
+```bash
+curl -X POST "http://localhost:8000/generate-text" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "prompt": "Explain clean architecture",
+    "system_message": "You are a software architect",
+    "temperature": 0.3,
+    "max_tokens": 500
+  }'
+```
+
+Example response:
+
+```json
+{
+  "text": "Generated text content...",
+  "model": "gpt-3.5-turbo",
+  "provider": "openai"
+}
+```
+
+##### Python Client Example
+
+```python
+import requests
+
+# List files
+response = requests.get("http://localhost:8000/files?directory=/path/to/directory")
+files = response.json()["files"]
+
+# Search files
+response = requests.get("http://localhost:8000/files/search?directory=/path/to/directory&pattern=*.py")
+matching_files = response.json()["files"]
+
+# Generate text
+response = requests.post(
+    "http://localhost:8000/generate-text",
+    json={"prompt": "Write a haiku about programming"}
+)
+generated_text = response.json()["text"]
 ```
 
 ### Project Structure
@@ -162,12 +285,15 @@ Tests are organized to mirror the source structure:
 - **openai**: OpenAI API integration for LLM functionality
 - **python-dotenv**: Environment variable management
 - **typing-extensions**: Enhanced type hints support
+- **fastapi**: Modern, fast web framework for building APIs
+- **uvicorn**: ASGI server for running FastAPI applications
 
 ### Development Dependencies
 
 - **pytest**: Testing framework with coverage and mocking
 - **basedpyright**: Static type checking
 - **ruff**: Code formatting and linting
+- **httpx**: HTTP client for testing API endpoints
 
 See [`pyproject.toml`](pyproject.toml) for complete dependency specifications.
 

@@ -5,7 +5,7 @@ File domain entity.
 import os
 from typing import Any
 
-from exceptions import FileRepositoryError
+from src.exceptions import FileRepositoryError
 
 
 class File:

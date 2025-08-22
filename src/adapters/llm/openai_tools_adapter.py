@@ -12,11 +12,11 @@ from openai.types.chat import (
     ChatCompletionToolUnionParam,
 )
 
-from adapters.llm.openai_adapter import (
+from src.adapters.llm.openai_adapter import (
     OpenAIAdapter,
 )
-from exceptions import LLMError
-from ports.llm.tools_port import ToolsHandlerPort
+from src.exceptions import LLMError
+from src.ports.llm.tools_port import ToolsHandlerPort
 
 
 class OpenAIToolsAdapter(OpenAIAdapter):

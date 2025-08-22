@@ -9,9 +9,9 @@ from openai import OpenAI
 from openai.types.chat import ChatCompletionMessageParam
 from typing_extensions import override
 
-from config.settings import settings
-from exceptions import LLMError
-from ports.llm.llm_port import LLMPort
+from src.config.settings import settings
+from src.exceptions import LLMError
+from src.ports.llm.llm_port import LLMPort
 
 
 class OpenAIMessageDict(TypedDict):

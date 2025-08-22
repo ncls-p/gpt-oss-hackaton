@@ -4,16 +4,16 @@ Dependency injection container for managing application dependencies.
 
 import logging
 
-from adapters.files.local_fs_adapter import LocalFileSystemAdapter
-from adapters.llm.openai_adapter import OpenAIAdapter
-from adapters.llm.openai_tools_adapter import OpenAIToolsAdapter  # nouveau
-from ports.files.file_repository_port import FileRepositoryPort
-from ports.llm.llm_port import LLMPort
-from ports.llm.tools_port import ToolsHandlerPort  # nouveau
-from use_cases.files.list_files import ListFilesUseCase
-from use_cases.files.search_files import SearchFilesUseCase
-from use_cases.llm.generate_text import GenerateTextUseCase
-from use_cases.tools.files_tools import FilesToolsHandler  # nouveau
+from src.adapters.files.local_fs_adapter import LocalFileSystemAdapter
+from src.adapters.llm.openai_adapter import OpenAIAdapter
+from src.adapters.llm.openai_tools_adapter import OpenAIToolsAdapter  # nouveau
+from src.ports.files.file_repository_port import FileRepositoryPort
+from src.ports.llm.llm_port import LLMPort
+from src.ports.llm.tools_port import ToolsHandlerPort  # nouveau
+from src.use_cases.files.list_files import ListFilesUseCase
+from src.use_cases.files.search_files import SearchFilesUseCase
+from src.use_cases.llm.generate_text import GenerateTextUseCase
+from src.use_cases.tools.files_tools import FilesToolsHandler  # nouveau
 
 
 class DependencyContainer:

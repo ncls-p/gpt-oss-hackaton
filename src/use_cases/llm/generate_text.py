@@ -5,8 +5,8 @@ Use case for generating text using an LLM.
 import logging
 from typing import Optional
 
-from exceptions import LLMError
-from ports.llm.llm_port import LLMPort
+from src.exceptions import LLMError
+from src.ports.llm.llm_port import LLMPort
 
 
 class GenerateTextUseCase:

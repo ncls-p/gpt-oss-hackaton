@@ -5,8 +5,15 @@ Main application demonstrating clean architecture with proper port usage and dep
 import logging
 import sys
 
-from container import container
-from exceptions import FileRepositoryError, LLMError
+from fastapi import FastAPI
+
+from src.api.routers import router as api_router
+from src.container import container
+from src.exceptions import FileRepositoryError, LLMError
+
+# Create FastAPI app
+app = FastAPI(title="Clean Architecture API")
+app.include_router(api_router)
 
 # Configure logging
 logging.basicConfig(

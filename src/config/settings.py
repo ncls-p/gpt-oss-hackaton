@@ -6,7 +6,7 @@ import os
 
 from dotenv import load_dotenv
 
-from exceptions import ConfigurationError
+from src.exceptions import ConfigurationError
 
 # Load environment variables from .env file
 _ = load_dotenv()
