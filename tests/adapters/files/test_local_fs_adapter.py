@@ -8,7 +8,7 @@ from unittest.mock import patch
 import pytest
 
 from src.adapters.files.local_fs_adapter import LocalFileSystemAdapter
-from src.entities.file import File
+from src.entities.File import File
 from src.exceptions import FileRepositoryError
 
 

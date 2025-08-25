@@ -6,7 +6,7 @@ import pytest
 from unittest.mock import MagicMock
 
 from src.use_cases.files.list_files import ListFilesUseCase
-from src.entities.file import File
+from src.entities.File import File
 from src.exceptions import FileRepositoryError
 from src.ports.files.file_repository_port import FileRepositoryPort
 

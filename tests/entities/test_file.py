@@ -6,7 +6,7 @@ import os
 import pytest
 from unittest.mock import patch
 
-from src.entities.file import File
+from src.entities.File import File
 from src.exceptions import FileRepositoryError
 
 
