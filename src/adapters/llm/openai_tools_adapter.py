@@ -5,18 +5,16 @@ Adapter OpenAI avec support des tools (function-calling).
 import json
 import logging
 from collections.abc import Iterable
-from typing import Any, cast
-
-from openai.types.chat import (
-    ChatCompletionMessageParam,
-    ChatCompletionToolUnionParam,
-)
+from typing import Dict, Any, Optional, cast
 
 from src.adapters.llm.openai_adapter import (
     OpenAIAdapter,
 )
 from src.exceptions import LLMError
 from src.ports.llm.tools_port import ToolsHandlerPort
+
+ChatCompletionMessageParam = Dict[str, Any]
+ChatCompletionToolUnionParam = Dict[str, Any]
 
 
 class OpenAIToolsAdapter(OpenAIAdapter):
@@ -126,7 +124,7 @@ class OpenAIToolsAdapter(OpenAIAdapter):
             LLMError: If the response is empty
         """
         if not getattr(msg, "tool_calls", None):
-            content: str | None = msg.content
+            content: Optional[str] = msg.content
             if not content:
                 raise LLMError("Réponse vide du modèle")
             return content.strip()

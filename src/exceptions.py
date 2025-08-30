@@ -25,3 +25,9 @@ class ConfigurationError(BaseAppError):
     """Exception raised for configuration errors."""
 
     pass
+
+
+class ApplicationError(BaseAppError):
+    """Exception raised for application launching errors."""
+
+    pass

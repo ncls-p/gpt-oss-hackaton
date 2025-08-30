@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from src.api.routers import router as api_router
 from src.container import container
 from src.exceptions import FileRepositoryError, LLMError
+from src.exceptions import ApplicationError  # ajout
 
 # Create FastAPI app
 app = FastAPI(title="Clean Architecture API")
@@ -152,6 +153,37 @@ def demonstrate_llm_operations():
         logger.error(f"Unexpected error: {e}")
 
 
+def demonstrate_application_operations():
+    """Demonstrate application opening using the LLM application tools."""
+    logger.info("\n" + "=" * 60)
+    logger.info("APPLICATION OPERATIONS DEMONSTRATION (LLM TOOLS)")
+    logger.info("=" * 60)
+
+    # Adapter LLM avec support des tools
+    llm_tools_adapter = container.get_llm_tools_adapter()
+
+    # Prompt brut transmis au LLM
+    prompt = "Ouvre l'application Terminal"
+    system_msg = "You are a computer's assistant. understand the wants of the user."
+    logger.info(f"Prompt: {prompt!r}")
+
+    try:
+        # Exécution: le LLM choisit le tool et l’adapter appelle dispatch() du handler
+        final_message: str = llm_tools_adapter.execute_with_system_message(
+            prompt, system_message=system_msg
+        )
+
+        logger.info("Assistant (final):")
+        logger.info(final_message)
+
+    except LLMError as e:
+        logger.error(f"Erreur tool LLM: {e}")
+    except ApplicationError as e:
+        logger.error(f"Erreur lors de l’ouverture de l’application: {e}")
+    except Exception as e:
+        logger.error(f"Erreur inattendue: {e}")
+
+
 def main():
     """Main application entry point."""
     logger.info("Clean Architecture Demo Application")
@@ -164,10 +196,13 @@ def main():
 
     try:
         # Demonstrate file operations
-        demonstrate_file_operations()
+        # demonstrate_file_operations()
 
         # Demonstrate LLM operations
-        demonstrate_llm_operations()
+        # demonstrate_llm_operations()
+
+        # Demonstrate Application operations
+        demonstrate_application_operations()
 
         logger.info("\n" + "=" * 60)
         logger.info("Demo completed successfully!")
