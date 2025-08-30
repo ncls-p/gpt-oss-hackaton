@@ -17,8 +17,8 @@ class OpenApplicationUseCase:
 
     def execute(self, app: Application, args: Optional[list[str]] = None) -> int:
         try:
-            self._logger.info(f"Opening application: {app.name} at {app.path}")
-            pid = self._launcher.open(app, args=args)
+            self._logger.info(f"Opening application: {app.get_details()}")
+            pid = self._launcher.open(app, args=args or [])
             self._logger.info(f"Application started (pid={pid})")
             return pid
         except ApplicationError:

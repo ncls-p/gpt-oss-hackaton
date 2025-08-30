@@ -113,7 +113,11 @@ class FilesToolsHandler(ToolsHandlerPort):
                 files = self._search_files_uc.execute(directory, pattern)
                 return json.dumps([f.get_details() for f in files], ensure_ascii=False)
 
-            raise LLMError(f"Tool inconnu: {name}")
+            # Indique volontairement au composite que ce handler ne gère pas ce tool
+            raise ValueError(f"Unknown tool: {name}")
+        except ValueError:
+            # Unknown tool for this handler: ne pas logger comme une erreur, laisser le composite tenter un autre handler
+            raise
         except Exception as e:
             self._logger.error(f"Error dispatching tool {name}: {e}")
             raise LLMError(f"Failed to execute tool {name}: {str(e)}")

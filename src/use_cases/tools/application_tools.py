@@ -6,8 +6,8 @@ import json
 import logging
 from typing import Any, Optional
 
-from src.entities.Application import Application
 from src.exceptions import LLMError
+from src.ports.application.application_resolver_port import ApplicationResolverPort
 from src.ports.llm.tools_port import ToolsHandlerPort, ToolSpec
 from src.use_cases.application.open_application import OpenApplicationUseCase
 
@@ -18,15 +18,18 @@ class ApplicationToolsHandler(ToolsHandlerPort):
     def __init__(
         self,
         application_use_case: OpenApplicationUseCase,
+        resolver: Optional[ApplicationResolverPort] = None,
         logger: Optional[logging.Logger] = None,
     ) -> None:
         """
         Initialize the ApplicationToolsHandler.
         Args:
             application_use_case: The use case for application operations.
+            resolver (Optional[ApplicationResolverPort]): Resolver for finding applications.
             logger (Optional[logging.Logger]): Logger instance. If None, a default logger is created.
         """
         self.application_use_case = application_use_case
+        self.resolver = resolver
         self.logger = logger or logging.getLogger(__name__)
 
     def available_tools(self) -> list[ToolSpec]:
@@ -36,34 +39,22 @@ class ApplicationToolsHandler(ToolsHandlerPort):
         return [
             {
                 "name": "application.open",
-                "description": "Open an application by name, bundle id, or absolute path. Precedence: path > bundle_id > name.",
+                "description": "Ouvre une application à partir d'un seul champ (nom, bundle id ou chemin).",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "path": {
+                        "app_info": {
                             "type": "string",
-                            "description": "Absolute path to the executable or .app bundle.",
-                        },
-                        "bundle_id": {
-                            "type": "string",
-                            "description": "macOS bundle identifier (e.g. com.apple.TextEdit).",
-                        },
-                        "name": {
-                            "type": "string",
-                            "description": "Human-readable application name (e.g. 'TextEdit').",
+                            "description": "Nom d'application, bundle id ou chemin absolu (ex: 'Visual Studio Code', 'com.apple.TextEdit', '/Applications/Notes.app').",
                         },
                         "args": {
                             "type": "array",
                             "items": {"type": "string"},
-                            "description": "Optional arguments passed to the application.",
+                            "description": "Arguments optionnels pour l'application.",
                         },
                     },
+                    "required": ["app_info"],
                     "additionalProperties": False,
-                    "anyOf": [
-                        {"required": ["path"]},
-                        {"required": ["bundle_id"]},
-                        {"required": ["name"]},
-                    ],
                 },
             }
         ]
@@ -72,40 +63,46 @@ class ApplicationToolsHandler(ToolsHandlerPort):
         """Dispatch a tool invocation to the appropriate use case."""
         try:
             if name != "application.open":
-                raise LLMError(f"Tool inconnu: {name}")
+                # Indique au composite que ce handler ne gère pas ce tool
+                raise ValueError(f"Unknown tool: {name}")
+            if not self.resolver:
+                raise LLMError("Aucun resolver disponible pour traiter 'app_info'.")
 
-            # Extract arguments
-            path = arguments.get("path")
-            bundle_id = arguments.get("bundle_id")
-            app_name = arguments.get("name")
+            app_info = arguments.get("app_info")
+            if not isinstance(app_info, str) or not app_info.strip():
+                raise LLMError("Le champ 'app_info' (string) est requis.")
+
             args = arguments.get("args") or []
-
-            if not (path or bundle_id or app_name):
-                raise LLMError(
-                    "Il faut fournir au moins l'un de 'path', 'bundle_id' ou 'name'"
-                )
-
-            # Coerce types
             if not isinstance(args, list):
                 args = [str(args)]
             args = [str(a) for a in args]
 
-            # Build Application entity (version unknown -> None)
-            app = Application(
-                str(path) if isinstance(path, str) else None,
-                str(app_name) if isinstance(app_name, str) else None,
-                str(bundle_id) if isinstance(bundle_id, str) else None,
-                None,
-            )
+            app = self.resolver.resolve(app_info)
+            if not app:
+                raise LLMError(
+                    f"Impossible de résoudre l'application depuis: {app_info!r}"
+                )
 
             details = app.get_details()
             self.logger.info(
-                f"Executing application.open with path={details.get('path')}, bundle_id={details.get('bundle_id')}, name={details.get('name')}, args={args}"
+                f"application.open via resolver: name={details.get('name')}, bundle_id={details.get('bundle_id')}, path={details.get('path')}, args={args}"
             )
 
             pid = self.application_use_case.execute(app, args=args)
-            return json.dumps({"status": "ok", "pid": pid}, ensure_ascii=False)
-
+            return json.dumps(
+                {
+                    "status": "ok",
+                    "pid": pid,
+                    "resolved_via": "resolver",
+                    "app": details,
+                },
+                ensure_ascii=False,
+            )
+        except ValueError:
+            # Unknown tool for this handler: ne pas logger comme une erreur, laisser le composite tenter un autre handler
+            raise
+        except LLMError:
+            raise
         except Exception as e:
             self.logger.error(f"Error dispatching tool {name}: {e}")
             raise LLMError(f"Failed to execute tool {name}: {str(e)}")

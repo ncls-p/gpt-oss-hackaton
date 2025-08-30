@@ -55,7 +55,7 @@ class LocalApplicationLauncher(ApplicationLauncherPort):
                 )
 
             if os.name == "nt":
-                # Windows: path or name in PATH
+                # Windows
                 if app.path:
                     proc = subprocess.Popen([app.path, *args], shell=False)
                     self._logger.info(f"Launched Windows app: {app.path}")
