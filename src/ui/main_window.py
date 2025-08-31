@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import textwrap
-from typing import Optional
+from typing import Optional, Any, List
 
 from PySide6.QtCore import QObject, Qt, QThread, Signal, Slot
 from PySide6.QtGui import QAction, QIcon
@@ -32,14 +32,15 @@ from PySide6.QtWidgets import (
 from src.container import container
 
 
-class _RunWorker(QObject):
+class _ChatWorker(QObject):
     started = Signal()
     finished = Signal(dict)
     error = Signal(str)
 
     def __init__(
         self,
-        prompt: str,
+        messages: Optional[List[dict]],
+        user_text: str,
         system_message: Optional[str],
         temperature: float,
         max_tokens: int,
@@ -47,7 +48,8 @@ class _RunWorker(QObject):
         require_final_tool: bool,
     ) -> None:
         super().__init__()
-        self.prompt = prompt
+        self.messages = messages or []
+        self.user_text = user_text
         self.system_message = system_message
         self.temperature = temperature
         self.max_tokens = max_tokens
@@ -64,8 +66,9 @@ class _RunWorker(QObject):
             if not isinstance(llm_tools, OpenAIToolsAdapter):
                 raise RuntimeError("Tools-enabled LLM adapter is not available")
 
-            result = llm_tools.run_with_trace(
-                prompt=self.prompt,
+            result = llm_tools.run_chat_turn_with_trace(
+                messages=self.messages,
+                user_text=self.user_text,
                 system_message=self.system_message,
                 temperature=self.temperature,
                 max_tokens=self.max_tokens,
@@ -80,19 +83,23 @@ class _RunWorker(QObject):
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("GPT OSS Hackathon — Tools UI")
+        self.setWindowTitle("GPT OSS Hackathon — Tools Chat UI")
         self.setMinimumSize(950, 600)
 
         self._build_actions()
         self._build_toolbar()
         self._build_layout()
+        # Chat state
+        self._chat_history: List[dict[str, Any]] = []
+        self._last_final_raw: str = ""
+        self._last_steps: List[dict[str, Any]] = []
 
     # UI building
     def _build_actions(self) -> None:
-        self.action_run = QAction(QIcon(), "Run", self)
-        self.action_run.triggered.connect(self._on_run_clicked)
+        self.action_run = QAction(QIcon(), "Send", self)
+        self.action_run.triggered.connect(self._on_send_clicked)
 
-        self.action_save = QAction(QIcon(), "Save Result…", self)
+        self.action_save = QAction(QIcon(), "Save Conversation…", self)
         self.action_save.triggered.connect(self._on_save_clicked)
 
         self.action_clear = QAction(QIcon(), "Clear", self)
@@ -112,14 +119,9 @@ class MainWindow(QMainWindow):
 
         splitter = QSplitter(Qt.Orientation.Horizontal, central)
 
-        # Left: Inputs
+        # Left: Settings
         left = QWidget(splitter)
         form = QFormLayout(left)
-        self.prompt_edit = QTextEdit(left)
-        self.prompt_edit.setPlaceholderText(
-            "What should I do? e.g. ‘Open Terminal and list *.py in ~/project then read README.md’"
-        )
-        self.prompt_edit.setAcceptRichText(False)
 
         self.system_edit = QLineEdit(left)
         self.system_edit.setPlaceholderText("You are a computer assistant… (optional)")
@@ -141,14 +143,13 @@ class MainWindow(QMainWindow):
         self.final_required_chk = QCheckBox("Require assistant.final to end", left)
         self.final_required_chk.setChecked(True)
 
-        run_btn = QPushButton("Run", left)
-        run_btn.clicked.connect(self._on_run_clicked)
+        run_btn = QPushButton("Send", left)
+        run_btn.clicked.connect(self._on_send_clicked)
 
         self.progress = QProgressBar(left)
         self.progress.setRange(0, 0)
         self.progress.setVisible(False)
 
-        form.addRow(QLabel("Prompt:"), self.prompt_edit)
         form.addRow(QLabel("System:"), self.system_edit)
         form.addRow(QLabel("Temperature:"), self.temp_spin)
         form.addRow(QLabel("Max tokens:"), self.max_tokens_spin)
@@ -157,21 +158,34 @@ class MainWindow(QMainWindow):
         form.addRow(run_btn)
         form.addRow(self.progress)
 
-        # Right: Outputs
+        # Right: Chat + Steps
         right = QWidget(splitter)
         right_layout = QGridLayout(right)
+        self.chat_view = QTextBrowser(right)
+        self.chat_view.setOpenExternalLinks(True)
 
-        self.final_text = QTextBrowser(right)
-        self.final_text.setOpenExternalLinks(True)
-        self.final_text.setPlaceholderText("Final assistant text will appear here… (Markdown supported)")
+        # input row
+        input_row = QHBoxLayout()
+        self.input_edit = QLineEdit(right)
+        self.input_edit.setPlaceholderText("Type a message…")
+        try:
+            # Send on Enter
+            self.input_edit.returnPressed.connect(self._on_send_clicked)
+        except Exception:
+            pass
+        send_btn = QPushButton("Send", right)
+        send_btn.clicked.connect(self._on_send_clicked)
+        input_row.addWidget(self.input_edit)
+        input_row.addWidget(send_btn)
 
         self.steps_list = QListWidget(right)
         self.steps_list.itemDoubleClicked.connect(self._show_step_details)
 
-        right_layout.addWidget(QLabel("Final Text"), 0, 0)
-        right_layout.addWidget(self.final_text, 1, 0)
-        right_layout.addWidget(QLabel("Tool Steps (double-click for details)"), 2, 0)
-        right_layout.addWidget(self.steps_list, 3, 0)
+        right_layout.addWidget(QLabel("Conversation"), 0, 0)
+        right_layout.addWidget(self.chat_view, 1, 0)
+        right_layout.addLayout(input_row, 2, 0)
+        right_layout.addWidget(QLabel("Tool Steps (double-click for details)"), 3, 0)
+        right_layout.addWidget(self.steps_list, 4, 0)
 
         splitter.addWidget(left)
         splitter.addWidget(right)
@@ -183,10 +197,10 @@ class MainWindow(QMainWindow):
 
     # Slots
     @Slot()
-    def _on_run_clicked(self) -> None:
-        prompt = self.prompt_edit.toPlainText().strip()
-        if not prompt:
-            QMessageBox.warning(self, "Missing prompt", "Please enter a prompt first.")
+    def _on_send_clicked(self) -> None:
+        user_text = self.input_edit.text().strip()
+        if not user_text:
+            QMessageBox.warning(self, "Missing message", "Please type a message first.")
             return
 
         system = self.system_edit.text().strip() or None
@@ -195,20 +209,24 @@ class MainWindow(QMainWindow):
         steps = int(self.steps_spin.value())
         final_required = bool(self.final_required_chk.isChecked())
 
+        # Clear input and show progress; history will update after backend turn
+        self.input_edit.clear()
+
         # Threaded worker
         self.progress.setVisible(True)
-        self.final_text.clear()
         self.steps_list.clear()
 
         self._thread = QThread(self)
-        self._worker = _RunWorker(
-            prompt, system, temp, max_tokens, steps, final_required
+        # pass a shallow copy of history to the worker
+        messages_copy: List[dict] = list(self._chat_history)
+        self._worker = _ChatWorker(
+            messages_copy, user_text, system, temp, max_tokens, steps, final_required
         )
         self._worker.moveToThread(self._thread)
 
         self._thread.started.connect(self._worker.run)
-        self._worker.finished.connect(self._on_run_finished)
-        self._worker.error.connect(self._on_run_error)
+        self._worker.finished.connect(self._on_chat_finished)
+        self._worker.error.connect(self._on_chat_error)
         self._worker.finished.connect(self._thread.quit)
         self._worker.finished.connect(self._worker.deleteLater)
         self._thread.finished.connect(self._thread.deleteLater)
@@ -216,32 +234,16 @@ class MainWindow(QMainWindow):
         self._thread.start()
 
     @Slot(dict)
-    def _on_run_finished(self, result: dict) -> None:
+    def _on_chat_finished(self, result: dict) -> None:
         self.progress.setVisible(False)
-        text = str(result.get("text", ""))
-        # Keep original raw text for Save
-        self._last_final_raw = text
-
-        # If backend accidentally returned a JSON object containing final_text,
-        # extract and render its Markdown; otherwise render the text as Markdown directly.
-        md = text
-        try:
-            import json as _json
-
-            obj = _json.loads(text)
-            if isinstance(obj, dict):
-                ft = obj.get("final_text") or obj.get("text") or obj.get("content")
-                if isinstance(ft, str) and ft.strip():
-                    md = ft
-        except Exception:
-            pass
-        # QTextBrowser supports setMarkdown; it gracefully renders plain text too
-        try:
-            self.final_text.setMarkdown(md)
-        except Exception:
-            self.final_text.setPlainText(md)
+        # Update history from backend
+        self._chat_history = list(result.get("messages", []) or [])
+        text_raw = str(result.get("text", ""))
+        self._last_final_raw = text_raw
+        self._render_conversation()
 
         steps = result.get("steps", []) or []
+        self._last_steps = steps
         for idx, step in enumerate(steps, start=1):
             name = step.get("name") or "?"
             res = step.get("result") or ""
@@ -251,9 +253,9 @@ class MainWindow(QMainWindow):
             self.steps_list.addItem(item)
 
     @Slot(str)
-    def _on_run_error(self, message: str) -> None:  # pragma: no cover
+    def _on_chat_error(self, message: str) -> None:  # pragma: no cover
         self.progress.setVisible(False)
-        QMessageBox.critical(self, "Run error", message)
+        QMessageBox.critical(self, "Chat error", message)
 
     @Slot(QListWidgetItem)
     def _show_step_details(self, item: QListWidgetItem) -> None:
@@ -271,23 +273,98 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _on_save_clicked(self) -> None:
-        # Preserve the exact raw text we received, not the rendered/plaintext version
-        text = getattr(self, "_last_final_raw", self.final_text.toPlainText())
-        if not text and self.steps_list.count() == 0:
-            QMessageBox.information(self, "Nothing to save", "Run something first.")
+        # Save the full conversation and last steps
+        if not self._chat_history and self.steps_list.count() == 0:
+            QMessageBox.information(self, "Nothing to save", "Start a conversation first.")
             return
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Save result", filter="JSON (*.json)"
-        )
+        path, _ = QFileDialog.getSaveFileName(self, "Save conversation", filter="JSON (*.json)")
         if not path:
             return
         steps = []
         for i in range(self.steps_list.count()):
             steps.append(self.steps_list.item(i).data(Qt.ItemDataRole.UserRole))
         with open(path, "w", encoding="utf-8") as f:
-            json.dump({"text": text, "steps": steps}, f, ensure_ascii=False, indent=2)
+            json.dump(
+                {
+                    "conversation": self._chat_history,
+                    "last_text": self._last_final_raw,
+                    "last_steps": steps,
+                },
+                f,
+                ensure_ascii=False,
+                indent=2,
+            )
 
     @Slot()
     def _on_clear_clicked(self) -> None:
-        self.final_text.clear()
+        self.chat_view.clear()
         self.steps_list.clear()
+        self._chat_history.clear()
+        self._last_final_raw = ""
+        self._last_steps = []
+
+    # Helpers
+    def _render_conversation(self) -> None:
+        # Rebuild the conversation view using Markdown
+        chunks: list[str] = []
+        last_rendered: str | None = None
+        for m in self._chat_history:
+            role = str(m.get("role", ""))
+            if role not in ("user", "assistant"):
+                continue
+            content = str(m.get("content", ""))
+            # Skip assistant interim messages that only carry tool_calls metadata
+            if role == "assistant" and m.get("tool_calls"):
+                continue
+
+            # Compact special JSON notices (like tool_call_error)
+            try:
+                obj = json.loads(content)
+                if isinstance(obj, dict) and obj.get("notice") == "tool_call_error":
+                    err = str(obj.get("error") or "Tool call error")
+                    tools = obj.get("available_tools") or []
+                    names = []
+                    if isinstance(tools, list):
+                        for t in tools:
+                            try:
+                                name = t.get("name")
+                                if isinstance(name, str):
+                                    names.append(name)
+                            except Exception:
+                                pass
+                    tools_str = (" — tools: " + ", ".join(names)) if names else ""
+                    disp = f"_Tool error_: {err}{tools_str}"
+                else:
+                    disp = self._extract_display_text(content)
+            except Exception:
+                disp = self._extract_display_text(content)
+
+            speaker = "You" if role == "user" else "Assistant"
+            block = f"**{speaker}:**\n\n{disp}".strip()
+            # Deduplicate consecutive identical blocks
+            if last_rendered is not None and block == last_rendered:
+                continue
+            chunks.append(block)
+            last_rendered = block
+        md = "\n\n".join(chunks) if chunks else ""
+        try:
+            self.chat_view.setMarkdown(md)
+        except Exception:
+            # Fallback to plain text if Markdown not supported
+            self.chat_view.setPlainText(md)
+
+    def _extract_display_text(self, text: str) -> str:
+        # If backend returned a JSON object as string, extract a useful field
+        s = text or ""
+        try:
+            obj = json.loads(s)
+            if isinstance(obj, dict):
+                for key in ("final_text", "text", "content", "message"):
+                    val = obj.get(key)
+                    if isinstance(val, str) and val.strip():
+                        return val
+                # If nothing obvious, pretty‑print JSON minimally
+                return json.dumps(obj, ensure_ascii=False)
+        except Exception:
+            pass
+        return s

@@ -82,7 +82,7 @@ class OpenAIToolsAdapter(OpenAIAdapter):
             "hint": hint
             or (
                 "Please call one of the available tools with strict JSON arguments. "
-                "When done, call assistant.final with {\"final_text\": \"...\"}."
+                'When done, call assistant.final with {"final_text": "..."}.'
             ),
             "available_tools": self._tools_catalog(),
         }
@@ -92,7 +92,10 @@ class OpenAIToolsAdapter(OpenAIAdapter):
             content = (
                 f"Tool call error: {err}. Please try again with a valid tool call."
             )
-        return cast(ChatCompletionMessageParam, cast(object, {"role": "assistant", "content": content}))
+        return cast(
+            ChatCompletionMessageParam,
+            cast(object, {"role": "assistant", "content": content}),
+        )
 
     def _control_tools(self) -> list[dict[str, Any]]:
         """Control tools, including aliases that some models tend to use.
@@ -123,6 +126,7 @@ class OpenAIToolsAdapter(OpenAIAdapter):
             "final",
             "json",
             "assistant|channel>final",
+            "commentary",
         ):
             tools.append(
                 {
@@ -155,10 +159,9 @@ class OpenAIToolsAdapter(OpenAIAdapter):
                     },
                 }
             )
-        # Only expose finalize tool once at least one non-final tool was used
-        # (or when finalize is not required at all)
-        if (not self._require_final_tool) or self._expose_final:
-            tools.extend(self._control_tools())
+        # Always expose finalize/control tools to avoid brittle 400s
+        # when the model tries to finalize early.
+        tools.extend(self._control_tools())
         return tools
 
     def _augment_system_message(
@@ -371,7 +374,9 @@ class OpenAIToolsAdapter(OpenAIAdapter):
                         )
                         response = self.client.chat.completions.create(
                             model=self.model,
-                            messages=cast(Iterable[ChatCompletionMessageParam], messages),
+                            messages=cast(
+                                Iterable[ChatCompletionMessageParam], messages
+                            ),
                             temperature=temperature,
                             max_tokens=max_tokens,
                             tools=cast(Iterable[ChatCompletionToolParam], tools),  # type: ignore
@@ -382,7 +387,9 @@ class OpenAIToolsAdapter(OpenAIAdapter):
                         try:
                             response = self.client.chat.completions.create(
                                 model=self.model,
-                                messages=cast(Iterable[ChatCompletionMessageParam], messages),
+                                messages=cast(
+                                    Iterable[ChatCompletionMessageParam], messages
+                                ),
                                 temperature=temperature,
                                 max_tokens=max_tokens,
                                 tool_choice="none",
@@ -465,7 +472,9 @@ class OpenAIToolsAdapter(OpenAIAdapter):
                         )
                         response = self.client.chat.completions.create(
                             model=self.model,
-                            messages=cast(Iterable[ChatCompletionMessageParam], messages),
+                            messages=cast(
+                                Iterable[ChatCompletionMessageParam], messages
+                            ),
                             temperature=temperature,
                             max_tokens=max_tokens,
                             tools=cast(Iterable[ChatCompletionToolParam], tools),  # type: ignore
@@ -475,7 +484,9 @@ class OpenAIToolsAdapter(OpenAIAdapter):
                         # Fallback: try without tools and return plain text
                         response = self.client.chat.completions.create(
                             model=self.model,
-                            messages=cast(Iterable[ChatCompletionMessageParam], messages),
+                            messages=cast(
+                                Iterable[ChatCompletionMessageParam], messages
+                            ),
                             temperature=temperature,
                             max_tokens=max_tokens,
                             tool_choice="none",
@@ -561,7 +572,9 @@ class OpenAIToolsAdapter(OpenAIAdapter):
                         )
                         response = self.client.chat.completions.create(
                             model=self.model,
-                            messages=cast(Iterable[ChatCompletionMessageParam], messages),
+                            messages=cast(
+                                Iterable[ChatCompletionMessageParam], messages
+                            ),
                             temperature=temperature,
                             max_tokens=max_tokens,
                             tools=cast(Iterable[ChatCompletionToolParam], tools),  # type: ignore
@@ -571,7 +584,9 @@ class OpenAIToolsAdapter(OpenAIAdapter):
                         # Fallback: attempt plain-text completion
                         response = self.client.chat.completions.create(
                             model=self.model,
-                            messages=cast(Iterable[ChatCompletionMessageParam], messages),
+                            messages=cast(
+                                Iterable[ChatCompletionMessageParam], messages
+                            ),
                             temperature=temperature,
                             max_tokens=max_tokens,
                             tool_choice="none",
@@ -630,6 +645,7 @@ class OpenAIToolsAdapter(OpenAIAdapter):
                         "final",
                         "json",
                         "assistant|channel>final",
+                        "commentary",
                     }:
                         final_text = str(parsed_args.get("final_text") or "").strip()
                         self._last_final_text = final_text
@@ -651,6 +667,15 @@ class OpenAIToolsAdapter(OpenAIAdapter):
                                         "name": self._FINAL_TOOL_NAME,
                                         "content": '{"status": "ok"}',
                                     },
+                                ),
+                            )
+                        )
+                        # Also append a user-visible assistant message with the final text
+                        messages.append(
+                            cast(
+                                ChatCompletionMessageParam,
+                                cast(
+                                    object, {"role": "assistant", "content": final_text}
                                 ),
                             )
                         )
@@ -717,3 +742,283 @@ class OpenAIToolsAdapter(OpenAIAdapter):
             if isinstance(e, LLMError):
                 raise
             raise LLMError(f"Échec de génération avec tools (trace): {e}")
+
+    def run_chat_turn_with_trace(
+        self,
+        messages: list[dict[str, Any]] | None,
+        user_text: str,
+        system_message: str | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """
+        Execute one chat turn (multi‑tour) with tools, given a conversation history.
+
+        Args:
+            messages: Existing conversation (list of {role, content, ...}). Can be empty/None.
+            user_text: New user message to append for this turn.
+            system_message: Optional system message to set at the start if history is empty or lacks it.
+
+        Returns:
+            {"text": str, "steps": list[dict], "messages": list[dict]} where messages is the updated history.
+        """
+        try:
+            temperature = kwargs.get("temperature", 0.7)
+            max_tokens = kwargs.get("max_tokens", 800)
+            tool_max_steps = kwargs.get("tool_max_steps", 4)
+            require_final_tool = bool(kwargs.get("require_final_tool", True))
+
+            # Build/augment history
+            history: list[ChatCompletionMessageParam] = []
+            base_msgs = list(messages or [])
+            has_system = any(m.get("role") == "system" for m in base_msgs)
+            if not has_system:
+                aug_sys = self._augment_system_message(
+                    system_message or "You are a helpful assistant.",
+                    require_final_tool,
+                )
+                history.append(cast(object, {"role": "system", "content": aug_sys}))
+            else:
+                # Reuse system from provided messages as-is
+                pass
+
+            # Append prior non-system messages
+            for m in base_msgs:
+                if m.get("role") != "system":
+                    history.append(cast(object, m))
+
+            # Append this user turn
+            history.append(cast(object, {"role": "user", "content": user_text}))
+
+            self._require_final_tool = require_final_tool
+            self._expose_final = False
+            tools = self._to_openai_tools()
+
+            steps: list[dict[str, Any]] = []
+            last_assistant_text: Optional[str] = None
+            self._last_final_text = None
+
+            for _ in range(tool_max_steps):
+                try:
+                    response = self.client.chat.completions.create(
+                        model=self.model,
+                        messages=cast(Iterable[ChatCompletionMessageParam], history),
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                        tools=cast(Iterable[ChatCompletionToolParam], tools),  # type: ignore
+                        tool_choice="auto",
+                    )
+                except Exception as api_exc:
+                    if self._is_tool_use_error(api_exc):
+                        history.append(
+                            self._assistant_msg_with_error_and_tools(api_exc)
+                        )
+                        try:
+                            response = self.client.chat.completions.create(
+                                model=self.model,
+                                messages=cast(
+                                    Iterable[ChatCompletionMessageParam], history
+                                ),
+                                temperature=temperature,
+                                max_tokens=max_tokens,
+                                tools=cast(Iterable[ChatCompletionToolParam], tools),  # type: ignore
+                                tool_choice="auto",
+                            )
+                        except Exception:
+                            # As a last resort, salvage a plain text reply
+                            response = self.client.chat.completions.create(
+                                model=self.model,
+                                messages=cast(
+                                    Iterable[ChatCompletionMessageParam], history
+                                ),
+                                temperature=temperature,
+                                max_tokens=max_tokens,
+                                tool_choice="none",
+                            )
+                    else:
+                        # Plain text salvage without tools
+                        response = self.client.chat.completions.create(
+                            model=self.model,
+                            messages=cast(
+                                Iterable[ChatCompletionMessageParam], history
+                            ),
+                            temperature=temperature,
+                            max_tokens=max_tokens,
+                            tool_choice="none",
+                        )
+                choice = response.choices[0]
+                msg = choice.message
+
+                # If no tool calls, this is a plain assistant answer
+                if not getattr(msg, "tool_calls", None):
+                    content: Optional[str] = msg.content
+                    if not content:
+                        raise LLMError("Réponse vide du modèle")
+                    if require_final_tool:
+                        history.append(
+                            cast(object, {"role": "assistant", "content": content})
+                        )
+                        last_assistant_text = content.strip()
+                    else:
+                        history.append(
+                            cast(object, {"role": "assistant", "content": content})
+                        )
+                        return {
+                            "text": content.strip(),
+                            "steps": steps,
+                            "messages": history,
+                        }
+
+                # Record assistant tool_calls and execute
+                tool_calls = list(getattr(msg, "tool_calls", []) or [])
+                history.append(
+                    cast(
+                        ChatCompletionMessageParam,
+                        cast(
+                            object,
+                            {
+                                "role": "assistant",
+                                "content": msg.content or "",
+                                "tool_calls": [
+                                    tc.model_dump() if hasattr(tc, "model_dump") else {}
+                                    for tc in tool_calls
+                                ],
+                            },
+                        ),
+                    )
+                )
+
+                for tool_call in tool_calls:
+                    if not hasattr(tool_call, "function"):
+                        continue
+                    name = getattr(tool_call.function, "name", None)
+                    args = getattr(tool_call.function, "arguments", "{}")
+                    try:
+                        parsed_args = json.loads(args)
+                    except Exception:
+                        parsed_args = {}
+                    if isinstance(name, str) and name.lower() in {
+                        self._FINAL_TOOL_NAME,
+                        "assistant.final",
+                        "final",
+                        "json",
+                        "assistant|channel>final",
+                        "commentary",
+                    }:
+                        final_text = str(parsed_args.get("final_text") or "").strip()
+                        self._last_final_text = final_text
+                        steps.append(
+                            {
+                                "name": self._FINAL_TOOL_NAME,
+                                "arguments": parsed_args,
+                                "result": '{"status": "ok"}',
+                            }
+                        )
+                        history.append(
+                            cast(
+                                ChatCompletionMessageParam,
+                                cast(
+                                    object,
+                                    {
+                                        "role": "tool",
+                                        "tool_call_id": tool_call.id,
+                                        "name": self._FINAL_TOOL_NAME,
+                                        "content": '{"status": "ok"}',
+                                    },
+                                ),
+                            )
+                        )
+                        # Also add an assistant message with the final text
+                        history.append(
+                            cast(object, {"role": "assistant", "content": final_text})
+                        )
+                        return {"text": final_text, "steps": steps, "messages": history}
+
+                    if not isinstance(name, str) or not name:
+                        continue
+                    try:
+                        result = self._tools_handler.dispatch(name, parsed_args)
+                    except Exception as tool_exc:
+                        err_payload = {
+                            "error": str(tool_exc),
+                            "available_tools": self._tools_catalog(),
+                            "note": (
+                                "Arguments must be strict JSON matching the tool schema. "
+                                "Use the exact tool names."
+                            ),
+                        }
+                        try:
+                            result = json.dumps(err_payload, ensure_ascii=False)
+                        except Exception:
+                            result = f"Tool error: {tool_exc}"
+                    steps.append(
+                        {"name": name, "arguments": parsed_args, "result": str(result)}
+                    )
+                    history.append(
+                        cast(
+                            ChatCompletionMessageParam,
+                            cast(
+                                object,
+                                {
+                                    "role": "tool",
+                                    "tool_call_id": tool_call.id,
+                                    "name": name,
+                                    "content": str(result),
+                                },
+                            ),
+                        )
+                    )
+
+                tools = self._to_openai_tools()
+
+            # Max steps reached
+            if require_final_tool:
+                text = (getattr(self, "_last_final_text", "") or "").strip()
+                if not text and last_assistant_text:
+                    text = last_assistant_text
+                if not text and steps:
+                    try:
+                        text = str(steps[-1].get("result", ""))
+                    except Exception:
+                        text = ""
+                return {"text": text, "steps": steps, "messages": history}
+            raise LLMError(
+                "Nombre maximal d'étapes d'outillage atteint sans réponse finale"
+            )
+        except Exception as e:
+            # Convert tool-use style errors to a conversational assistant message
+            if self._is_tool_use_error(e):
+                # Add assistant notice with error + tools, return gracefully
+                hint_msg = self._assistant_msg_with_error_and_tools(e)
+                try:
+                    # Make a human-friendly assistant text too
+                    human_text = (
+                        "J'ai rencontré une erreur lors de l'appel d'un outil. "
+                        "Je te redonne la liste des outils disponibles et leurs schémas. "
+                        "Réessaie en appelant un outil avec des arguments JSON stricts, puis termine avec assistant.final.\n\n"
+                        f"Erreur: {str(e)}"
+                    )
+                except Exception:
+                    human_text = (
+                        "Erreur d'outillage. Réessaie avec un appel d'outil valide."
+                    )
+
+                # Append hint to existing history if available
+                try:
+                    existing = cast(
+                        list[ChatCompletionMessageParam], locals().get("history", [])
+                    )
+                except Exception:
+                    existing = []
+                messages = list(existing)
+                try:
+                    messages.append(hint_msg)
+                    messages.append(
+                        cast(object, {"role": "assistant", "content": human_text})
+                    )
+                except Exception:
+                    pass
+                return {"text": human_text, "steps": [], "messages": messages}
+
+            # Other errors: still return a graceful assistant text instead of raising
+            safe_text = f"Une erreur est survenue: {str(e)}"
+            return {"text": safe_text, "steps": [], "messages": []}
