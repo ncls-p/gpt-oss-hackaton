@@ -7,10 +7,19 @@ requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.116.1",
     "openai>=1.99.9",
+    "pyside6>=6.9.2",
     "python-dotenv>=1.1.1",
     "typing-extensions>=4.7",
     "uvicorn[standard]>=0.30.6",
 ]
+
+[project.scripts]
+# Serve the FastAPI app (env: HOST, PORT, RELOAD=1 for autoreload)
+hack-serve = "src.cli_serve:main"
+# Run a one-shot tools-enabled assistant and print JSON result
+hack-tools = "src.cli_tools:main"
+# Launch the desktop UI (Qt)
+hack-ui = "src.ui.app:main"
 
 [dependency-groups]
 dev = [
@@ -20,3 +29,10 @@ dev = [
     "pytest-mock>=3.14.1",
     "ruff>=0.12.10",
 ]
+
+[tool.uv]
+dev-dependencies = []
+
+[tool.uv.scripts]
+serve = "uvicorn src.main:app --reload"
+tools = "python -m src.cli_tools --prompt 'List files in ~'"

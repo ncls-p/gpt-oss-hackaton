@@ -79,6 +79,21 @@ class FilesToolsHandler(ToolsHandlerPort):
                     "additionalProperties": False,
                 },
             },
+            {
+                "name": "files.read",
+                "description": "Lire le contenu d'un fichier texte (limité à ~100KB).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Chemin absolu du fichier à lire",
+                        }
+                    },
+                    "required": ["path"],
+                    "additionalProperties": False,
+                },
+            },
         ]
 
     def dispatch(self, name: str, arguments: dict[str, Any]) -> Any:
@@ -112,6 +127,54 @@ class FilesToolsHandler(ToolsHandlerPort):
                 )
                 files = self._search_files_uc.execute(directory, pattern)
                 return json.dumps([f.get_details() for f in files], ensure_ascii=False)
+
+            if name == "files.read":
+                path = str(arguments["path"])  # required
+                self._logger.info(f"Executing files.read tool with path: {path}")
+                try:
+                    # Basic safeguards: size cap ~100KB
+                    import os
+
+                    if not os.path.exists(path):
+                        raise FileNotFoundError(path)
+                    if not os.path.isfile(path):
+                        raise IsADirectoryError(path)
+                    size = os.path.getsize(path)
+                    if size > 100 * 1024:
+                        return json.dumps(
+                            {
+                                "status": "too_large",
+                                "message": "File exceeds 100KB cap",
+                                "size": size,
+                                "path": path,
+                            },
+                            ensure_ascii=False,
+                        )
+                    with open(path, "r", encoding="utf-8", errors="strict") as f:
+                        content = f.read()
+                    return json.dumps(
+                        {"status": "ok", "path": path, "content": content},
+                        ensure_ascii=False,
+                    )
+                except UnicodeDecodeError:
+                    return json.dumps(
+                        {
+                            "status": "binary_or_non_utf8",
+                            "message": "File is not valid UTF-8 text",
+                            "path": path,
+                        },
+                        ensure_ascii=False,
+                    )
+                except Exception as e:
+                    self._logger.error(f"files.read error: {e}")
+                    return json.dumps(
+                        {
+                            "status": "error",
+                            "message": str(e),
+                            "path": path,
+                        },
+                        ensure_ascii=False,
+                    )
 
             # Indique volontairement au composite que ce handler ne gère pas ce tool
             raise ValueError(f"Unknown tool: {name}")

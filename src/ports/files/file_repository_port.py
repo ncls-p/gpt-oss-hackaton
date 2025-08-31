@@ -4,7 +4,7 @@ File repository port interface defining the contract for file operations.
 
 from abc import ABC, abstractmethod
 
-from src.entities.File import File
+from src.entities.file import File
 
 
 class FileRepositoryPort(ABC):

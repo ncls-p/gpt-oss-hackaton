@@ -10,6 +10,7 @@ A Python application demonstrating Clean Architecture principles with file opera
 - **Tool Integration**: LLM-powered file management tools
 - **Comprehensive Testing**: Full test suite with pytest
 - **HTTP API**: RESTful API endpoints for all functionality
+- **Tools API + UI**: Tools-enabled assistant endpoint with a minimal web UI
 
 ## Installation
 
@@ -85,6 +86,21 @@ uv run uvicorn src.main:app --reload
 ```
 
 The API will be available at `http://localhost:8000` and interactive documentation at `http://localhost:8000/docs`.
+Additionally, a minimal tools UI is available at `http://localhost:8000/ui/tools`.
+
+#### Desktop UI (Qt)
+
+Run a native desktop interface (no browser required):
+
+```bash
+hack-ui
+```
+
+Features:
+- Prompt, system message, temperature, max tokens, tool steps, and “require final tool” toggle
+- Run actions without blocking (background thread)
+- Final assistant text viewer and a steps panel (double-click to inspect)
+- Save results to JSON
 
 ### Examples
 
@@ -208,7 +224,7 @@ Example response:
 
 ##### Python Client Example
 
-```python
+````python
 import requests
 
 # List files
@@ -225,7 +241,48 @@ response = requests.post(
     json={"prompt": "Write a haiku about programming"}
 )
 generated_text = response.json()["text"]
+
+##### Tools Assistant (LLM with function-calling)
+
+POST to `/assistant/tools` to let the model call tools like file listing, file reading, opening applications, and opening URLs. The response includes the final text and a trace of tool invocations.
+
+```bash
+curl -X POST "http://localhost:8000/assistant/tools" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "prompt": "Ouvre l'application Terminal puis lis le fichier /etc/hosts",
+    "system_message": "You are a computer assistant",
+    "tool_max_steps": 2
+  }'
+````
+
+Example response:
+
+```json
+{
+  "text": "...final assistant message...",
+  "steps": [
+    {
+      "name": "application.open",
+      "arguments": { "app_info": "Terminal" },
+      "result": "{...}"
+    },
+    {
+      "name": "files.read",
+      "arguments": { "path": "/etc/hosts" },
+      "result": "{...}"
+    }
+  ]
+}
 ```
+
+Notes on multi-tool flows and finalization:
+
+- The assistant can chain multiple tools in a single run.
+- To explicitly end the loop, it should call the control tool `assistant.final` with a `final_text` field.
+- When the Tools UI option “Require final tool” is enabled (default), normal assistant text alone does not end the run; the model must call `assistant.final`.
+
+````
 
 ### Project Structure
 
@@ -235,6 +292,7 @@ The application follows Clean Architecture with these key components:
 - **Use Cases** ([`src/use_cases/`](src/use_cases/)): Business logic and workflows
 - **Ports** ([`src/ports/`](src/ports/)): Abstract interfaces for external dependencies
 - **Adapters** ([`src/adapters/`](src/adapters/)): Concrete implementations (Local FS, OpenAI)
+  - OpenAI tools adapter with composite registry (files, application, system)
 - **Configuration** ([`src/config/`](src/config/)): Application settings and environment
 - **Entry Point** ([`src/main.py`](src/main.py)): CLI interface and dependency injection
 
@@ -268,7 +326,7 @@ pytest tests/use_cases/files/test_list_files.py
 
 # Run tests with verbose output
 pytest -v
-```
+````
 
 ### Test Structure
 

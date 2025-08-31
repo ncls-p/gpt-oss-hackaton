@@ -5,7 +5,7 @@ Use case for searching files in a directory.
 import logging
 from typing import Optional
 
-from src.entities.File import File
+from src.entities.file import File
 from src.exceptions import FileRepositoryError
 from src.ports.files.file_repository_port import FileRepositoryPort
 
