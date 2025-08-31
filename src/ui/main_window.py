@@ -35,6 +35,7 @@ class _ChatWorker(QObject):
     started = Signal()
     finished = Signal(dict)
     error = Signal(str)
+    step = Signal(dict)
 
     def __init__(
         self,
@@ -65,6 +66,12 @@ class _ChatWorker(QObject):
             if not isinstance(llm_tools, OpenAIToolsAdapter):
                 raise RuntimeError("Tools-enabled LLM adapter is not available")
 
+            def _emit_step(ev: dict) -> None:
+                try:
+                    self.step.emit(ev)
+                except Exception:
+                    pass
+
             result = llm_tools.run_chat_turn_with_trace(
                 messages=self.messages,
                 user_text=self.user_text,
@@ -73,6 +80,7 @@ class _ChatWorker(QObject):
                 max_tokens=self.max_tokens,
                 tool_max_steps=self.tool_max_steps,
                 require_final_tool=self.require_final_tool,
+                on_step=_emit_step,
             )
             self.finished.emit(result)
         except Exception as e:  # pragma: no cover
@@ -92,6 +100,7 @@ class MainWindow(QMainWindow):
         self._chat_history: List[dict[str, Any]] = []
         self._last_final_raw: str = ""
         self._last_steps: List[dict[str, Any]] = []
+        self._live_steps: List[dict[str, Any]] = []
 
     # UI building
     def _build_actions(self) -> None:
@@ -214,6 +223,7 @@ class MainWindow(QMainWindow):
         # Threaded worker
         self.progress.setVisible(True)
         self.steps_list.clear()
+        self._live_steps = []
 
         self._thread = QThread(self)
         # pass a shallow copy of history to the worker
@@ -226,6 +236,7 @@ class MainWindow(QMainWindow):
         self._thread.started.connect(self._worker.run)
         self._worker.finished.connect(self._on_chat_finished)
         self._worker.error.connect(self._on_chat_error)
+        self._worker.step.connect(self._on_step_event)
         self._worker.finished.connect(self._thread.quit)
         self._worker.finished.connect(self._worker.deleteLater)
         self._thread.finished.connect(self._thread.deleteLater)
@@ -241,15 +252,17 @@ class MainWindow(QMainWindow):
         self._last_final_raw = text_raw
         self._render_conversation()
 
+        # If we didn't receive live steps (no tools used), render the result steps once
         steps = result.get("steps", []) or []
         self._last_steps = steps
-        for idx, step in enumerate(steps, start=1):
-            name = step.get("name") or "?"
-            res = step.get("result") or ""
-            snippet = textwrap.shorten(str(res).replace("\n", " "), width=120)
-            item = QListWidgetItem(f"{idx}. {name} — {snippet}")
-            item.setData(Qt.ItemDataRole.UserRole, step)
-            self.steps_list.addItem(item)
+        if not getattr(self, "_live_steps", None) and steps:
+            for idx, step in enumerate(steps, start=1):
+                name = step.get("name") or "?"
+                res = step.get("result") or ""
+                snippet = textwrap.shorten(str(res).replace("\n", " "), width=120)
+                item = QListWidgetItem(f"{idx}. {name} — {snippet}")
+                item.setData(Qt.ItemDataRole.UserRole, step)
+                self.steps_list.addItem(item)
 
     @Slot(str)
     def _on_chat_error(self, message: str) -> None:  # pragma: no cover
@@ -301,6 +314,7 @@ class MainWindow(QMainWindow):
         self._chat_history.clear()
         self._last_final_raw = ""
         self._last_steps = []
+        self._live_steps = []
 
     # Helpers
     def _render_conversation(self) -> None:
@@ -351,6 +365,40 @@ class MainWindow(QMainWindow):
         except Exception:
             # Fallback to plain text if Markdown not supported
             self.chat_view.setPlainText(md)
+
+    @Slot(dict)
+    def _on_step_event(self, ev: dict) -> None:
+        # Live update of tool usage
+        self._live_steps = getattr(self, "_live_steps", [])
+        phase = str(ev.get("phase") or "")
+        name = str(ev.get("name") or "?")
+        if phase == "call":
+            args = ev.get("arguments")
+            snippet = textwrap.shorten(str(args), width=120)
+            label = f"▶ {name} {snippet}"
+            step = {"name": name, "arguments": args, "result": None}
+            item = QListWidgetItem(label)
+            item.setData(Qt.ItemDataRole.UserRole, step)
+            self.steps_list.addItem(item)
+            self._live_steps.append(step)
+        elif phase == "result":
+            res = ev.get("result")
+            snippet = textwrap.shorten(str(res).replace("\n", " "), width=120)
+            label = f"✓ {name} — {snippet}"
+            step = {"name": name, "arguments": None, "result": res}
+            item = QListWidgetItem(label)
+            item.setData(Qt.ItemDataRole.UserRole, step)
+            self.steps_list.addItem(item)
+            self._live_steps.append(step)
+        elif phase == "error":
+            err = ev.get("error")
+            snippet = textwrap.shorten(str(err).replace("\n", " "), width=120)
+            label = f"⚠ tool error — {snippet}"
+            step = {"name": "error", "arguments": None, "result": str(err)}
+            item = QListWidgetItem(label)
+            item.setData(Qt.ItemDataRole.UserRole, step)
+            self.steps_list.addItem(item)
+            self._live_steps.append(step)
 
     def _extract_display_text(self, text: str) -> str:
         # If backend returned a JSON object as string, extract a useful field

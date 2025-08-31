@@ -5,7 +5,7 @@ Adapter OpenAI avec support des tools (function-calling).
 import json
 import logging
 from collections.abc import Iterable
-from typing import Any, Optional, cast
+from typing import Any, Optional, cast, Callable
 
 from openai.types.chat import (
     ChatCompletionMessageParam,
@@ -178,6 +178,13 @@ class OpenAIToolsAdapter(OpenAIAdapter):
             "Do not call assistant.final until you have used at least one non-final tool.",
             "When calling tools, arguments must be strict JSON (no prose, no markdown).",
             "Use the exact tool names provided; do not invent new names.",
+            # Nudge for capability prompts so the model surfaces tools
+            (
+                "If the user asks about your capabilities (e.g., 'what can you do',"
+                " 'liste ce que tu peux faire', 'tes outils'), prefer to call"
+                " domain.list and summarize available domains/tools rather than"
+                " giving only generic capabilities."
+            ),
         ]
         if require_final_tool:
             rules.append(
@@ -347,6 +354,7 @@ class OpenAIToolsAdapter(OpenAIAdapter):
             # Augment system message with tool rules to avoid invalid arguments
             aug_sys = self._augment_system_message(system_message, require_final_tool)
             # Reset session flags
+
             self._require_final_tool = require_final_tool
             self._expose_final = False
             messages = self._prepare_messages(prompt, aug_sys)
@@ -767,6 +775,15 @@ class OpenAIToolsAdapter(OpenAIAdapter):
             tool_max_steps = kwargs.get("tool_max_steps", 4)
             require_final_tool = bool(kwargs.get("require_final_tool", True))
 
+            # Optional live step callback for UI
+            on_step: Optional[Callable[[dict[str, Any]], None]] = None
+            try:
+                cb = kwargs.get("on_step")
+                if callable(cb):
+                    on_step = cast(Callable[[dict[str, Any]], None], cb)
+            except Exception:
+                on_step = None
+
             # Build/augment history
             history: list[ChatCompletionMessageParam] = []
             base_msgs = list(messages or [])
@@ -821,6 +838,11 @@ class OpenAIToolsAdapter(OpenAIAdapter):
                     )
                 except Exception as api_exc:
                     if self._is_tool_use_error(api_exc):
+                        if on_step:
+                            try:
+                                on_step({"phase": "error", "error": str(api_exc)})
+                            except Exception:
+                                pass
                         history.append(
                             self._assistant_msg_with_error_and_tools(api_exc)
                         )
@@ -914,6 +936,12 @@ class OpenAIToolsAdapter(OpenAIAdapter):
                         parsed_args = json.loads(args)
                     except Exception:
                         parsed_args = {}
+                    # Notify start of call
+                    if on_step and isinstance(name, str) and name:
+                        try:
+                            on_step({"phase": "call", "name": name, "arguments": parsed_args})
+                        except Exception:
+                            pass
                     if isinstance(name, str) and name.lower() in {
                         self._FINAL_TOOL_NAME,
                         "assistant.final",
@@ -952,6 +980,11 @@ class OpenAIToolsAdapter(OpenAIAdapter):
                                 cast(object, {"role": "assistant", "content": final_text}),
                             )
                         )
+                        if on_step:
+                            try:
+                                on_step({"phase": "result", "name": self._FINAL_TOOL_NAME, "result": {"status": "ok"}})
+                            except Exception:
+                                pass
                         return {"text": final_text, "steps": steps, "messages": history}
 
                     if not isinstance(name, str) or not name:
@@ -974,6 +1007,11 @@ class OpenAIToolsAdapter(OpenAIAdapter):
                     steps.append(
                         {"name": name, "arguments": parsed_args, "result": str(result)}
                     )
+                    if on_step:
+                        try:
+                            on_step({"phase": "result", "name": name, "result": str(result)})
+                        except Exception:
+                            pass
                     history.append(
                         cast(
                             ChatCompletionMessageParam,

@@ -61,16 +61,22 @@ class DecisionTreeToolsHandler(ToolsHandlerPort):
                     "parameters": {
                         "type": "object",
                         "properties": {},
-                        "additionalProperties": False,
+                        # Tolérer les propriétés superflues pour éviter des 400 inutiles
+                        "additionalProperties": True,
                     },
                 },
                 {
                     "name": "domain.files",
-                    "description": "Sélectionner le domaine 'files' pour accéder aux outils de fichiers.",
+                    "description": "Sélectionner le domaine 'files' (accepte optionnellement directory/path et pattern pour enchaîner un list/search).",
                     "parameters": {
                         "type": "object",
-                        "properties": {},
-                        "additionalProperties": False,
+                        "properties": {
+                            "directory": {"type": "string"},
+                            "path": {"type": "string"},
+                            "pattern": {"type": "string"},
+                        },
+                        # Autoriser d'autres propriétés, le handler les ignorera
+                        "additionalProperties": True,
                     },
                 },
                 {
@@ -79,7 +85,7 @@ class DecisionTreeToolsHandler(ToolsHandlerPort):
                     "parameters": {
                         "type": "object",
                         "properties": {},
-                        "additionalProperties": False,
+                        "additionalProperties": True,
                     },
                 },
                 {
@@ -88,7 +94,7 @@ class DecisionTreeToolsHandler(ToolsHandlerPort):
                     "parameters": {
                         "type": "object",
                         "properties": {},
-                        "additionalProperties": False,
+                        "additionalProperties": True,
                     },
                 },
             ]
@@ -118,7 +124,36 @@ class DecisionTreeToolsHandler(ToolsHandlerPort):
                 {"domains": list(self._domains.keys())}, ensure_ascii=False
             )
         if name == "domain.files":
-            return self._select("files")
+            # Select files domain first
+            _sel = self._select("files")
+            # If caller provided a directory/path (optionally pattern), proactively run the
+            # appropriate files tool to reduce a round-trip.
+            try:
+                directory = str(
+                    (arguments.get("directory") or arguments.get("path") or "")
+                ).strip()
+            except Exception:
+                directory = ""
+            try:
+                pattern = str(arguments.get("pattern") or "").strip()
+            except Exception:
+                pattern = ""
+            if directory:
+                files_handler = self._domains.get("files")
+                if files_handler:
+                    try:
+                        if pattern:
+                            return files_handler.dispatch(
+                                "files.search",
+                                {"directory": directory, "pattern": pattern},
+                            )
+                        return files_handler.dispatch(
+                            "files.list", {"directory": directory}
+                        )
+                    except Exception:
+                        # If something goes wrong, at least return the selection result
+                        return _sel
+            return _sel
         if name == "domain.apps":
             return self._select("apps")
         if name == "domain.system":
