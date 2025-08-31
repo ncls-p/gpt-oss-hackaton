@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QSplitter,
     QTextBrowser,
+    QTextEdit,
     QToolBar,
     QVBoxLayout,
     QSizePolicy,
@@ -32,6 +33,28 @@ from PySide6.QtWidgets import (
 
 from src.container import container
 
+
+class ChatInput(QTextEdit):
+    sendRequested = Signal()
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setAcceptRichText(False)
+        self.setPlaceholderText("Type a message…")
+        self.setFixedHeight(70)
+
+    def keyPressEvent(self, event) -> None:  # type: ignore[override]
+        try:
+            if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+                    # Insert newline
+                    return super().keyPressEvent(event)
+                # Submit
+                self.sendRequested.emit()
+                return
+        except Exception:
+            pass
+        return super().keyPressEvent(event)
 
 class _ChatWorker(QObject):
     started = Signal()
@@ -184,17 +207,12 @@ class MainWindow(QMainWindow):
 
         # input row
         input_row = QHBoxLayout()
-        self.input_edit = QLineEdit(chat_area)
-        self.input_edit.setPlaceholderText("Type a message…")
-        try:
-            # Send on Enter
-            self.input_edit.returnPressed.connect(self._on_send_clicked)
-        except Exception:
-            pass
-        send_btn = QPushButton("Send", chat_area)
-        send_btn.clicked.connect(self._on_send_clicked)
+        self.input_edit = ChatInput(chat_area)
+        self.input_edit.sendRequested.connect(self._on_send_clicked)
+        self.send_btn = QPushButton("Send", chat_area)
+        self.send_btn.clicked.connect(self._on_send_clicked)
         input_row.addWidget(self.input_edit)
-        input_row.addWidget(send_btn)
+        input_row.addWidget(self.send_btn)
 
         chat_layout.addWidget(QLabel("Conversation"))
         chat_layout.addWidget(self.chat_view)
@@ -226,7 +244,7 @@ class MainWindow(QMainWindow):
     # Slots
     @Slot()
     def _on_send_clicked(self) -> None:
-        user_text = self.input_edit.text().strip()
+        user_text = self.input_edit.toPlainText().strip()
         if not user_text:
             QMessageBox.warning(self, "Missing message", "Please type a message first.")
             return
@@ -242,6 +260,12 @@ class MainWindow(QMainWindow):
 
         # Threaded worker
         self.progress.setVisible(True)
+        # disable input while running
+        try:
+            self.input_edit.setEnabled(False)
+            self.send_btn.setEnabled(False)
+        except Exception:
+            pass
         self.steps_list.clear()
         self._live_steps = []
 
@@ -266,6 +290,12 @@ class MainWindow(QMainWindow):
     @Slot(dict)
     def _on_chat_finished(self, result: dict) -> None:
         self.progress.setVisible(False)
+        try:
+            self.input_edit.setEnabled(True)
+            self.send_btn.setEnabled(True)
+            self.input_edit.setFocus()
+        except Exception:
+            pass
         # Update history from backend
         self._chat_history = list(result.get("messages", []) or [])
         text_raw = str(result.get("text", ""))
@@ -287,6 +317,11 @@ class MainWindow(QMainWindow):
     @Slot(str)
     def _on_chat_error(self, message: str) -> None:  # pragma: no cover
         self.progress.setVisible(False)
+        try:
+            self.input_edit.setEnabled(True)
+            self.send_btn.setEnabled(True)
+        except Exception:
+            pass
         QMessageBox.critical(self, "Chat error", message)
 
     @Slot(QListWidgetItem)
@@ -433,6 +468,10 @@ class MainWindow(QMainWindow):
             item = QListWidgetItem(label)
             item.setData(Qt.ItemDataRole.UserRole, step)
             self.steps_list.addItem(item)
+            try:
+                self.steps_list.scrollToBottom()
+            except Exception:
+                pass
             self._live_steps.append(step)
         elif phase == "result":
             res = ev.get("result")
@@ -442,6 +481,10 @@ class MainWindow(QMainWindow):
             item = QListWidgetItem(label)
             item.setData(Qt.ItemDataRole.UserRole, step)
             self.steps_list.addItem(item)
+            try:
+                self.steps_list.scrollToBottom()
+            except Exception:
+                pass
             self._live_steps.append(step)
         elif phase == "error":
             err = ev.get("error")
@@ -451,6 +494,10 @@ class MainWindow(QMainWindow):
             item = QListWidgetItem(label)
             item.setData(Qt.ItemDataRole.UserRole, step)
             self.steps_list.addItem(item)
+            try:
+                self.steps_list.scrollToBottom()
+            except Exception:
+                pass
             self._live_steps.append(step)
 
     def _extract_display_text(self, text: str) -> str:
