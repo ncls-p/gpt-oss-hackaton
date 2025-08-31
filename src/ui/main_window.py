@@ -12,7 +12,6 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
-    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -413,7 +412,9 @@ class MainWindow(QMainWindow):
             self.chat_view.setPlainText(md)
         # Auto-scroll to bottom on new content
         try:
-            self.chat_view.moveCursor(QTextCursor.End)
+            cursor = self.chat_view.textCursor()
+            cursor.movePosition(QTextCursor.MoveOperation.End)
+            self.chat_view.setTextCursor(cursor)
             self.chat_view.ensureCursorVisible()
         except Exception:
             pass
