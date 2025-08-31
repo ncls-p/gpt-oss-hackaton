@@ -53,13 +53,14 @@ class LocalFileSystemAdapter(FileRepositoryPort):
         """
         files: list[File] = []
         for file_path in file_paths:
-            if os.path.isfile(file_path):
-                try:
+            try:
+                # Create entries for both files and directories
+                if os.path.isfile(file_path) or os.path.isdir(file_path):
                     files.append(File(file_path))
-                except Exception as e:
-                    # Log the error but continue with other files
-                    self._logger.warning(f"Could not process file {file_path}: {e}")
-                    continue
+            except Exception as e:
+                # Log the error but continue with other entries
+                self._logger.warning(f"Could not process entry {file_path}: {e}")
+                continue
 
         return files
 
@@ -110,7 +111,7 @@ class LocalFileSystemAdapter(FileRepositoryPort):
 
             # Construct the search path
             search_path = os.path.join(directory, pattern)
-            file_paths = glob.glob(search_path)
+            file_paths = [p for p in glob.glob(search_path) if os.path.isfile(p)]
             return self._create_file_entities(file_paths)
 
         except FileRepositoryError:
@@ -140,7 +141,7 @@ class LocalFileSystemAdapter(FileRepositoryPort):
 
             # Construct the recursive search path
             search_path = os.path.join(directory, "**", pattern)
-            file_paths = glob.glob(search_path, recursive=True)
+            file_paths = [p for p in glob.glob(search_path, recursive=True) if os.path.isfile(p)]
             return self._create_file_entities(file_paths)
 
         except FileRepositoryError:

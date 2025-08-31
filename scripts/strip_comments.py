@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import io
 import os
-import sys
 import tokenize
 from pathlib import Path
 
@@ -31,7 +30,7 @@ def strip_file(path: Path) -> None:
             # Skip comments entirely
             continue
         # Preserve spacing between tokens
-        (srow, scol), (erow, ecol) = start, end
+        (srow, scol) = start
         psrow, pscol = prev_end
         if srow > psrow:
             out.write("\n" * (srow - psrow))
