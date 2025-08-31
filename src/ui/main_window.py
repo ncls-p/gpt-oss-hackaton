@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import textwrap
 from typing import Optional, Any, List
+import difflib
 
 from PySide6.QtCore import QObject, Qt, QThread, Signal, Slot
 from PySide6.QtGui import QAction, QIcon
@@ -318,9 +319,15 @@ class MainWindow(QMainWindow):
 
     # Helpers
     def _render_conversation(self) -> None:
-        # Rebuild the conversation view using Markdown
-        chunks: list[str] = []
-        last_rendered: str | None = None
+        # Rebuild the conversation view using Markdown and merge near-duplicates
+        blocks: list[tuple[str, str]] = []  # (speaker, content)
+
+        def _norm(s: str) -> str:
+            try:
+                return " ".join(s.strip().split()).lower()
+            except Exception:
+                return s.strip().lower()
+
         for m in self._chat_history:
             role = str(m.get("role", ""))
             if role not in ("user", "assistant"):
@@ -353,13 +360,32 @@ class MainWindow(QMainWindow):
                 disp = self._extract_display_text(content)
 
             speaker = "You" if role == "user" else "Assistant"
-            block = f"**{speaker}:**\n\n{disp}".strip()
-            # Deduplicate consecutive identical blocks
-            if last_rendered is not None and block == last_rendered:
-                continue
-            chunks.append(block)
-            last_rendered = block
-        md = "\n\n".join(chunks) if chunks else ""
+
+            # Merge near-duplicate consecutive assistant messages by replacement
+            if blocks and speaker == "Assistant":
+                last_speaker, last_text = blocks[-1]
+                if last_speaker == "Assistant":
+                    a, b = _norm(last_text), _norm(disp)
+                    same = (
+                        a == b
+                        or (a in b and len(a) / max(len(b), 1) >= 0.75)
+                        or (b in a and len(b) / max(len(a), 1) >= 0.75)
+                    )
+                    if not same:
+                        try:
+                            ratio = difflib.SequenceMatcher(None, a, b).ratio()
+                            same = ratio >= 0.90
+                        except Exception:
+                            same = False
+                    if same:
+                        blocks[-1] = (speaker, disp)
+                        continue
+
+            blocks.append((speaker, disp))
+
+        md = (
+            "\n\n".join(f"**{sp}:**\n\n{tx}".strip() for sp, tx in blocks) if blocks else ""
+        )
         try:
             self.chat_view.setMarkdown(md)
         except Exception:

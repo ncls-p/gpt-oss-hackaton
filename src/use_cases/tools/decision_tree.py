@@ -53,52 +53,57 @@ class DecisionTreeToolsHandler(ToolsHandlerPort):
         return handler.available_tools() if handler else []
 
     def available_tools(self) -> list[ToolSpec]:
+        """
+        Always expose domain selectors so the model can switch domains at any time.
+        If a domain is active, append its tools after the selectors.
+        """
+        base: list[ToolSpec] = [
+            {
+                "name": "domain.list",
+                "description": "Lister les domaines disponibles (files, apps, system).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    # Tolérer les propriétés superflues pour éviter des 400 inutiles
+                    "additionalProperties": True,
+                },
+            },
+            {
+                "name": "domain.files",
+                "description": "Sélectionner le domaine 'files' (accepte optionnellement directory/path et pattern pour enchaîner un list/search).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "directory": {"type": "string"},
+                        "path": {"type": "string"},
+                        "pattern": {"type": "string"},
+                    },
+                    # Autoriser d'autres propriétés, le handler les ignorera
+                    "additionalProperties": True,
+                },
+            },
+            {
+                "name": "domain.apps",
+                "description": "Sélectionner le domaine 'apps' pour accéder aux outils d'applications.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": True,
+                },
+            },
+            {
+                "name": "domain.system",
+                "description": "Sélectionner le domaine 'system' pour accéder aux outils système.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": True,
+                },
+            },
+        ]
         if not self._active:
-            return [
-                {
-                    "name": "domain.list",
-                    "description": "Lister les domaines disponibles (files, apps, system).",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {},
-                        # Tolérer les propriétés superflues pour éviter des 400 inutiles
-                        "additionalProperties": True,
-                    },
-                },
-                {
-                    "name": "domain.files",
-                    "description": "Sélectionner le domaine 'files' (accepte optionnellement directory/path et pattern pour enchaîner un list/search).",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "directory": {"type": "string"},
-                            "path": {"type": "string"},
-                            "pattern": {"type": "string"},
-                        },
-                        # Autoriser d'autres propriétés, le handler les ignorera
-                        "additionalProperties": True,
-                    },
-                },
-                {
-                    "name": "domain.apps",
-                    "description": "Sélectionner le domaine 'apps' pour accéder aux outils d'applications.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {},
-                        "additionalProperties": True,
-                    },
-                },
-                {
-                    "name": "domain.system",
-                    "description": "Sélectionner le domaine 'system' pour accéder aux outils système.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {},
-                        "additionalProperties": True,
-                    },
-                },
-            ]
-        return self._domain_tools()
+            return base
+        return base + self._domain_tools()
 
     def _select(self, key: str) -> str:
         if key not in self._domains:

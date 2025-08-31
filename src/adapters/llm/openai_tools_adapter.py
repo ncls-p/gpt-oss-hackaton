@@ -3,6 +3,7 @@ Adapter OpenAI avec support des tools (function-calling).
 """
 
 import json
+import difflib
 import logging
 from collections.abc import Iterable
 from typing import Any, Optional, cast, Callable
@@ -31,6 +32,80 @@ class OpenAIToolsAdapter(OpenAIAdapter):
         self._expose_final: bool = False
         # Last known final text for best-effort fallbacks
         self._last_final_text: Optional[str] = None
+
+    # ------------------------------
+    # Small text utilities to reduce duplicate messages
+    # ------------------------------
+
+    def _norm_text(self, s: str) -> str:
+        try:
+            return " ".join((s or "").strip().split()).lower()
+        except Exception:
+            return (s or "").strip().lower()
+
+    def _is_similar(self, a: str, b: str) -> bool:
+        na, nb = self._norm_text(a), self._norm_text(b)
+        if not na or not nb:
+            return na == nb
+        if na == nb:
+            return True
+        # Containment heuristic
+        if (na in nb and len(na) / max(len(nb), 1) >= 0.75) or (
+            nb in na and len(nb) / max(len(na), 1) >= 0.75
+        ):
+            return True
+        # Fuzzy ratio via difflib
+        try:
+            ratio = difflib.SequenceMatcher(None, na, nb).ratio()
+            return ratio >= 0.90
+        except Exception:
+            return False
+
+    def _filter_ui_messages(
+        self, history: list[ChatCompletionMessageParam]
+    ) -> list[ChatCompletionMessageParam]:
+        """Return a copy of history where, after the last user message, only
+        the last plain assistant message (no tool_calls) is kept.
+
+        This guarantees the UI shows a single assistant reply per turn even if
+        the model produced multiple assistant texts before finalizing.
+        """
+        try:
+            # Find last user index
+            last_user_idx = -1
+            for i, m in enumerate(history):
+                if isinstance(m, dict) and m.get("role") == "user":
+                    last_user_idx = i
+            if last_user_idx < 0:
+                # No user found; just return as-is
+                return list(history)
+
+            before = list(history[: last_user_idx + 1])
+            after = list(history[last_user_idx + 1 :])
+
+            # Collect plain assistant messages (no tool_calls) in 'after'
+            plain_assistant_indices: list[int] = []
+            for i, m in enumerate(after):
+                if not isinstance(m, dict):
+                    continue
+                if m.get("role") == "assistant" and not m.get("tool_calls"):
+                    plain_assistant_indices.append(i)
+
+            if len(plain_assistant_indices) <= 1:
+                return before + after
+
+            # Keep only the last plain assistant; drop earlier ones
+            keep_last = plain_assistant_indices[-1]
+            pruned_after: list[ChatCompletionMessageParam] = []
+            for i, m in enumerate(after):
+                if i in plain_assistant_indices and i != keep_last:
+                    continue
+                pruned_after.append(m)
+
+            return before + pruned_after
+        except Exception:
+            # In doubt, do not mutate
+            return list(history)
 
     # ------------------------------
     # Helpers
@@ -905,7 +980,7 @@ class OpenAIToolsAdapter(OpenAIAdapter):
                         return {
                             "text": content.strip(),
                             "steps": steps,
-                            "messages": history,
+                            "messages": self._filter_ui_messages(history),
                         }
 
                 # Record assistant tool_calls and execute
@@ -973,19 +1048,43 @@ class OpenAIToolsAdapter(OpenAIAdapter):
                                 ),
                             )
                         )
-                        # Also add an assistant message with the final text
-                        history.append(
-                            cast(
-                                ChatCompletionMessageParam,
-                                cast(object, {"role": "assistant", "content": final_text}),
+                        # Also add an assistant message with the final text (avoid near-duplicates)
+                        try:
+                            last_plain_assistant = None
+                            for prev in reversed(history):
+                                if (
+                                    isinstance(prev, dict)
+                                    and prev.get("role") == "assistant"
+                                    and not prev.get("tool_calls")
+                                ):
+                                    last_plain_assistant = str(prev.get("content") or "")
+                                    break
+                            if last_plain_assistant is None or not self._is_similar(
+                                last_plain_assistant, final_text
+                            ):
+                                history.append(
+                                    cast(
+                                        ChatCompletionMessageParam,
+                                        cast(object, {"role": "assistant", "content": final_text}),
+                                    )
+                                )
+                        except Exception:
+                            history.append(
+                                cast(
+                                    ChatCompletionMessageParam,
+                                    cast(object, {"role": "assistant", "content": final_text}),
+                                )
                             )
-                        )
                         if on_step:
                             try:
                                 on_step({"phase": "result", "name": self._FINAL_TOOL_NAME, "result": {"status": "ok"}})
                             except Exception:
                                 pass
-                        return {"text": final_text, "steps": steps, "messages": history}
+                        return {
+                            "text": final_text,
+                            "steps": steps,
+                            "messages": self._filter_ui_messages(history),
+                        }
 
                     if not isinstance(name, str) or not name:
                         continue
@@ -1039,7 +1138,11 @@ class OpenAIToolsAdapter(OpenAIAdapter):
                         text = str(steps[-1].get("result", ""))
                     except Exception:
                         text = ""
-                return {"text": text, "steps": steps, "messages": history}
+                return {
+                    "text": text,
+                    "steps": steps,
+                    "messages": self._filter_ui_messages(history),
+                }
             raise LLMError(
                 "Nombre maximal d'étapes d'outillage atteint sans réponse finale"
             )
