@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSpinBox,
     QSplitter,
+    QTextBrowser,
     QTextEdit,
     QToolBar,
     QWidget,
@@ -160,9 +161,9 @@ class MainWindow(QMainWindow):
         right = QWidget(splitter)
         right_layout = QGridLayout(right)
 
-        self.final_text = QTextEdit(right)
-        self.final_text.setReadOnly(True)
-        self.final_text.setPlaceholderText("Final assistant text will appear here…")
+        self.final_text = QTextBrowser(right)
+        self.final_text.setOpenExternalLinks(True)
+        self.final_text.setPlaceholderText("Final assistant text will appear here… (Markdown supported)")
 
         self.steps_list = QListWidget(right)
         self.steps_list.itemDoubleClicked.connect(self._show_step_details)
@@ -218,7 +219,27 @@ class MainWindow(QMainWindow):
     def _on_run_finished(self, result: dict) -> None:
         self.progress.setVisible(False)
         text = str(result.get("text", ""))
-        self.final_text.setPlainText(text)
+        # Keep original raw text for Save
+        self._last_final_raw = text
+
+        # If backend accidentally returned a JSON object containing final_text,
+        # extract and render its Markdown; otherwise render the text as Markdown directly.
+        md = text
+        try:
+            import json as _json
+
+            obj = _json.loads(text)
+            if isinstance(obj, dict):
+                ft = obj.get("final_text") or obj.get("text") or obj.get("content")
+                if isinstance(ft, str) and ft.strip():
+                    md = ft
+        except Exception:
+            pass
+        # QTextBrowser supports setMarkdown; it gracefully renders plain text too
+        try:
+            self.final_text.setMarkdown(md)
+        except Exception:
+            self.final_text.setPlainText(md)
 
         steps = result.get("steps", []) or []
         for idx, step in enumerate(steps, start=1):
@@ -250,7 +271,8 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _on_save_clicked(self) -> None:
-        text = self.final_text.toPlainText()
+        # Preserve the exact raw text we received, not the rendered/plaintext version
+        text = getattr(self, "_last_final_raw", self.final_text.toPlainText())
         if not text and self.steps_list.count() == 0:
             QMessageBox.information(self, "Nothing to save", "Run something first.")
             return
