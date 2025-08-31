@@ -2,11 +2,11 @@
 Adapter OpenAI avec support des tools (function-calling).
 """
 
-import json
 import difflib
+import json
 import logging
 from collections.abc import Iterable
-from typing import Any, Optional, cast, Callable
+from typing import Any, Callable, Optional, cast
 
 from openai.types.chat import (
     ChatCompletionMessageParam,
@@ -408,7 +408,7 @@ class OpenAIToolsAdapter(OpenAIAdapter):
         if not getattr(msg, "tool_calls", None):
             content: Optional[str] = msg.content
             if not content:
-                raise LLMError("Réponse vide du modèle")
+                raise LLMError("Empty response from the model")
             return content.strip()
         return ""
 
@@ -510,14 +510,12 @@ class OpenAIToolsAdapter(OpenAIAdapter):
                 if isinstance(getattr(self, "_last_final_text", None), str):
                     return cast(str, self._last_final_text)
 
-            raise LLMError(
-                "Nombre maximal d'étapes d'outillage atteint sans réponse finale"
-            )
+            raise LLMError("Reached tool step limit without a final answer")
 
         except Exception as e:
             if isinstance(e, LLMError):
                 raise
-            raise LLMError(f"Échec de génération avec tools: {e}")
+            raise LLMError(f"Failed to generate with tools: {e}")
 
     def execute_with_system_message(
         self,
@@ -599,14 +597,12 @@ class OpenAIToolsAdapter(OpenAIAdapter):
                 if isinstance(getattr(self, "_last_final_text", None), str):
                     return cast(str, self._last_final_text)
 
-            raise LLMError(
-                "Nombre maximal d'étapes d'outillage atteint sans réponse finale"
-            )
+            raise LLMError("Reached tool step limit without a final answer")
 
         except Exception as e:
             if isinstance(e, LLMError):
                 raise
-            raise LLMError(f"Échec de génération avec tools: {e}")
+            raise LLMError(f"Failed to generate with tools: {e}")
 
     def run_with_trace(
         self,
@@ -681,7 +677,7 @@ class OpenAIToolsAdapter(OpenAIAdapter):
                 if not getattr(msg, "tool_calls", None):
                     content: Optional[str] = msg.content
                     if not content:
-                        raise LLMError("Réponse vide du modèle")
+                        raise LLMError("Empty response from the model")
                     if require_final_tool:
                         # Treat as intermediate, keep going to encourage finalize
                         messages.append(
@@ -818,13 +814,11 @@ class OpenAIToolsAdapter(OpenAIAdapter):
                     except Exception:
                         text = ""
                 return {"text": text, "steps": steps}
-            raise LLMError(
-                "Nombre maximal d'étapes d'outillage atteint sans réponse finale"
-            )
+            raise LLMError("Reached tool step limit without a final answer")
         except Exception as e:
             if isinstance(e, LLMError):
                 raise
-            raise LLMError(f"Échec de génération avec tools (trace): {e}")
+            raise LLMError(f"Failed to generate with tools (trace): {e}")
 
     def run_chat_turn_with_trace(
         self,
@@ -881,9 +875,7 @@ class OpenAIToolsAdapter(OpenAIAdapter):
             # Append prior non-system messages
             for m in base_msgs:
                 if m.get("role") != "system":
-                    history.append(
-                        cast(ChatCompletionMessageParam, cast(object, m))
-                    )
+                    history.append(cast(ChatCompletionMessageParam, cast(object, m)))
 
             # Append this user turn
             history.append(
@@ -961,7 +953,7 @@ class OpenAIToolsAdapter(OpenAIAdapter):
                 if not getattr(msg, "tool_calls", None):
                     content: Optional[str] = msg.content
                     if not content:
-                        raise LLMError("Réponse vide du modèle")
+                        raise LLMError("Empty response from the model")
                     if require_final_tool:
                         history.append(
                             cast(
@@ -1014,7 +1006,13 @@ class OpenAIToolsAdapter(OpenAIAdapter):
                     # Notify start of call
                     if on_step and isinstance(name, str) and name:
                         try:
-                            on_step({"phase": "call", "name": name, "arguments": parsed_args})
+                            on_step(
+                                {
+                                    "phase": "call",
+                                    "name": name,
+                                    "arguments": parsed_args,
+                                }
+                            )
                         except Exception:
                             pass
                     if isinstance(name, str) and name.lower() in {
@@ -1057,7 +1055,9 @@ class OpenAIToolsAdapter(OpenAIAdapter):
                                     and prev.get("role") == "assistant"
                                     and not prev.get("tool_calls")
                                 ):
-                                    last_plain_assistant = str(prev.get("content") or "")
+                                    last_plain_assistant = str(
+                                        prev.get("content") or ""
+                                    )
                                     break
                             if last_plain_assistant is None or not self._is_similar(
                                 last_plain_assistant, final_text
@@ -1065,19 +1065,34 @@ class OpenAIToolsAdapter(OpenAIAdapter):
                                 history.append(
                                     cast(
                                         ChatCompletionMessageParam,
-                                        cast(object, {"role": "assistant", "content": final_text}),
+                                        cast(
+                                            object,
+                                            {
+                                                "role": "assistant",
+                                                "content": final_text,
+                                            },
+                                        ),
                                     )
                                 )
                         except Exception:
                             history.append(
                                 cast(
                                     ChatCompletionMessageParam,
-                                    cast(object, {"role": "assistant", "content": final_text}),
+                                    cast(
+                                        object,
+                                        {"role": "assistant", "content": final_text},
+                                    ),
                                 )
                             )
                         if on_step:
                             try:
-                                on_step({"phase": "result", "name": self._FINAL_TOOL_NAME, "result": {"status": "ok"}})
+                                on_step(
+                                    {
+                                        "phase": "result",
+                                        "name": self._FINAL_TOOL_NAME,
+                                        "result": {"status": "ok"},
+                                    }
+                                )
                             except Exception:
                                 pass
                         return {
@@ -1108,7 +1123,9 @@ class OpenAIToolsAdapter(OpenAIAdapter):
                     )
                     if on_step:
                         try:
-                            on_step({"phase": "result", "name": name, "result": str(result)})
+                            on_step(
+                                {"phase": "result", "name": name, "result": str(result)}
+                            )
                         except Exception:
                             pass
                     history.append(
@@ -1143,9 +1160,7 @@ class OpenAIToolsAdapter(OpenAIAdapter):
                     "steps": steps,
                     "messages": self._filter_ui_messages(history),
                 }
-            raise LLMError(
-                "Nombre maximal d'étapes d'outillage atteint sans réponse finale"
-            )
+            raise LLMError("Reached tool step limit without a final answer")
         except Exception as e:
             # Convert tool-use style errors to a conversational assistant message
             if self._is_tool_use_error(e):
@@ -1154,14 +1169,14 @@ class OpenAIToolsAdapter(OpenAIAdapter):
                 try:
                     # Make a human-friendly assistant text too
                     human_text = (
-                        "J'ai rencontré une erreur lors de l'appel d'un outil. "
-                        "Je te redonne la liste des outils disponibles et leurs schémas. "
-                        "Réessaie en appelant un outil avec des arguments JSON stricts, puis termine avec assistant.final.\n\n"
-                        f"Erreur: {str(e)}"
+                        "I encountered an error while calling a tool. "
+                        "Here are the available tools and schemas again. "
+                        "Try calling a tool with strict JSON arguments, then finish with assistant.final.\n\n"
+                        f"Error: {str(e)}"
                     )
                 except Exception:
                     human_text = (
-                        "Erreur d'outillage. Réessaie avec un appel d'outil valide."
+                        "Tooling error. Please try again with a valid tool call."
                     )
 
                 # Append hint to existing history if available
@@ -1185,5 +1200,5 @@ class OpenAIToolsAdapter(OpenAIAdapter):
                 return {"text": human_text, "steps": [], "messages": history_msgs}
 
             # Other errors: still return a graceful assistant text instead of raising
-            safe_text = f"Une erreur est survenue: {str(e)}"
+            safe_text = f"An error occurred: {str(e)}"
             return {"text": safe_text, "steps": [], "messages": []}

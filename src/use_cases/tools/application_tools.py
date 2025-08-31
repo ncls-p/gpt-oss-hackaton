@@ -1,5 +1,5 @@
 """
-Tools "application.*" mappés sur les use cases Application.
+Tools "application.*" mapped to the Application use cases.
 """
 
 import json
@@ -39,18 +39,18 @@ class ApplicationToolsHandler(ToolsHandlerPort):
         return [
             {
                 "name": "application.open",
-                "description": "Ouvre une application à partir d'un seul champ (nom, bundle id ou chemin).",
+                "description": "Open an application from a single field (name, bundle id or path).",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "app_info": {
                             "type": "string",
-                            "description": "Nom d'application, bundle id ou chemin absolu (ex: 'Visual Studio Code', 'com.apple.TextEdit', '/Applications/Notes.app').",
+                            "description": "Application name, bundle id or absolute path (e.g., 'Visual Studio Code', 'com.apple.TextEdit', '/Applications/Notes.app').",
                         },
                         "args": {
                             "type": "array",
                             "items": {"type": "string"},
-                            "description": "Arguments optionnels pour l'application.",
+                            "description": "Optional arguments to pass to the application.",
                         },
                     },
                     "required": ["app_info"],
@@ -63,14 +63,14 @@ class ApplicationToolsHandler(ToolsHandlerPort):
         """Dispatch a tool invocation to the appropriate use case."""
         try:
             if name != "application.open":
-                # Indique au composite que ce handler ne gère pas ce tool
+                # Signal to the composite that this handler doesn't handle the tool
                 raise ValueError(f"Unknown tool: {name}")
             if not self.resolver:
-                raise LLMError("Aucun resolver disponible pour traiter 'app_info'.")
+                raise LLMError("No resolver available to process 'app_info'.")
 
             app_info = arguments.get("app_info")
             if not isinstance(app_info, str) or not app_info.strip():
-                raise LLMError("Le champ 'app_info' (string) est requis.")
+                raise LLMError("Field 'app_info' (string) is required.")
 
             args = arguments.get("args") or []
             if not isinstance(args, list):
@@ -79,9 +79,7 @@ class ApplicationToolsHandler(ToolsHandlerPort):
 
             app = self.resolver.resolve(app_info)
             if not app:
-                raise LLMError(
-                    f"Impossible de résoudre l'application depuis: {app_info!r}"
-                )
+                raise LLMError(f"Unable to resolve application from: {app_info!r}")
 
             details = app.get_details()
             self.logger.info(

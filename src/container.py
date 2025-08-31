@@ -128,7 +128,7 @@ class DependencyContainer:
 
     def get_files_tools_handler(self) -> ToolsHandlerPort:
         """
-        Registre des tools 'files.*' adossé aux use cases Files.
+        Register tools 'files.*' mapped to Files use cases.
         """
         if "files_tools_handler" not in self._instances:
             list_uc = self.get_list_files_use_case()
@@ -180,7 +180,7 @@ class DependencyContainer:
 
     def get_application_tools_handler(self) -> ToolsHandlerPort:
         """
-        Registre des tools 'application.*' adossé aux use cases Application.
+        Register tools 'application.*' mapped to Application use cases.
         """
         if "application_tools_handler" not in self._instances:
             open_app_uc = self.get_open_application_use_case()

@@ -60,17 +60,16 @@ class DecisionTreeToolsHandler(ToolsHandlerPort):
         base: list[ToolSpec] = [
             {
                 "name": "domain.list",
-                "description": "Lister les domaines disponibles (files, apps, system).",
+                "description": "List available domains (files, apps, system).",
                 "parameters": {
                     "type": "object",
                     "properties": {},
-                    # Tolérer les propriétés superflues pour éviter des 400 inutiles
                     "additionalProperties": True,
                 },
             },
             {
                 "name": "domain.files",
-                "description": "Sélectionner le domaine 'files' (accepte optionnellement directory/path et pattern pour enchaîner un list/search).",
+                "description": "Select the 'files' domain (optionally accepts directory/path and pattern to chain a list/search).",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -78,13 +77,12 @@ class DecisionTreeToolsHandler(ToolsHandlerPort):
                         "path": {"type": "string"},
                         "pattern": {"type": "string"},
                     },
-                    # Autoriser d'autres propriétés, le handler les ignorera
                     "additionalProperties": True,
                 },
             },
             {
                 "name": "domain.apps",
-                "description": "Sélectionner le domaine 'apps' pour accéder aux outils d'applications.",
+                "description": "Select the 'apps' domain to access application tools.",
                 "parameters": {
                     "type": "object",
                     "properties": {},
@@ -93,7 +91,7 @@ class DecisionTreeToolsHandler(ToolsHandlerPort):
             },
             {
                 "name": "domain.system",
-                "description": "Sélectionner le domaine 'system' pour accéder aux outils système.",
+                "description": "Select the 'system' domain to access system tools.",
                 "parameters": {
                     "type": "object",
                     "properties": {},

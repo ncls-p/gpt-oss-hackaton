@@ -1,5 +1,5 @@
 """
-Tools "files.*" mappés sur les use cases Files.
+Tools "files.*" mapped to the Files use cases.
 """
 
 import json
@@ -47,13 +47,13 @@ class FilesToolsHandler(ToolsHandlerPort):
         return [
             {
                 "name": "files.list",
-                "description": "Lister les fichiers d'un répertoire.",
+                "description": "List files in a directory.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "directory": {
                             "type": "string",
-                            "description": "Chemin du répertoire",
+                            "description": "Directory path",
                         },
                     },
                     "required": ["directory"],
@@ -62,17 +62,17 @@ class FilesToolsHandler(ToolsHandlerPort):
             },
             {
                 "name": "files.search",
-                "description": "Rechercher des fichiers par motif dans un répertoire.",
+                "description": "Search files by pattern in a directory.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "directory": {
                             "type": "string",
-                            "description": "Chemin du répertoire",
+                            "description": "Directory path",
                         },
                         "pattern": {
                             "type": "string",
-                            "description": "Motif de recherche (ex: '*.py')",
+                            "description": "Search pattern (e.g., '*.py')",
                         },
                     },
                     "required": ["directory", "pattern"],
@@ -81,13 +81,13 @@ class FilesToolsHandler(ToolsHandlerPort):
             },
             {
                 "name": "files.read",
-                "description": "Lire le contenu d'un fichier texte (limité à ~100KB).",
+                "description": "Read a text file content (limited to ~100KB).",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "path": {
                             "type": "string",
-                            "description": "Chemin absolu du fichier à lire",
+                            "description": "Absolute path to the file to read",
                         }
                     },
                     "required": ["path"],
@@ -176,10 +176,10 @@ class FilesToolsHandler(ToolsHandlerPort):
                         ensure_ascii=False,
                     )
 
-            # Indique volontairement au composite que ce handler ne gère pas ce tool
+            # Signal deliberately that this handler doesn't handle the tool
             raise ValueError(f"Unknown tool: {name}")
         except ValueError:
-            # Unknown tool for this handler: ne pas logger comme une erreur, laisser le composite tenter un autre handler
+            # Unknown tool for this handler: let the composite try another handler
             raise
         except Exception as e:
             self._logger.error(f"Error dispatching tool {name}: {e}")

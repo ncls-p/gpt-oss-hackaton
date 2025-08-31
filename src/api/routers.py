@@ -203,7 +203,7 @@ def tools_ui():
     <h1>LLM Tools</h1>
     <div class=\"row\">
       <label>Prompt</label>
-      <textarea id=\"prompt\" placeholder=\"Ex: Ouvre l'application Terminal et liste les fichiers du dossier ~/\"></textarea>
+      <textarea id=\"prompt\" placeholder=\"Ex: Open the Terminal application and list files in the ~/ folder\"></textarea>
     </div>
     <div class=\"row\">
       <label>System message (optional)</label>

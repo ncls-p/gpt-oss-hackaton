@@ -24,13 +24,13 @@ class SystemToolsHandler(ToolsHandlerPort):
         return [
             {
                 "name": "system.open_url",
-                "description": "Ouvre une URL dans le navigateur par défaut.",
+                "description": "Open a URL in the default browser.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "url": {
                             "type": "string",
-                            "description": "URL absolue à ouvrir",
+                            "description": "Absolute URL to open",
                         }
                     },
                     "required": ["url"],

@@ -163,12 +163,12 @@ def demonstrate_application_operations():
     llm_tools_adapter = container.get_llm_tools_adapter()
 
     # Prompt brut transmis au LLM
-    prompt = "Ouvre l'application Terminal"
+    prompt = "Open the Terminal application"
     system_msg = "You are a computer's assistant. understand the wants of the user."
     logger.info(f"Prompt: {prompt!r}")
 
     try:
-        # Exécution: le LLM choisit le tool et l’adapter appelle dispatch() du handler
+        # Execution: the LLM chooses the tool and the adapter calls dispatch() of the handler
         final_message: str = llm_tools_adapter.execute_with_system_message(
             prompt, system_message=system_msg
         )
@@ -177,11 +177,11 @@ def demonstrate_application_operations():
         logger.info(final_message)
 
     except LLMError as e:
-        logger.error(f"Erreur tool LLM: {e}")
+        logger.error(f"LLM tool error: {e}")
     except ApplicationError as e:
-        logger.error(f"Erreur lors de l’ouverture de l’application: {e}")
+        logger.error(f"Error while opening application: {e}")
     except Exception as e:
-        logger.error(f"Erreur inattendue: {e}")
+        logger.error(f"Unexpected error: {e}")
 
 
 def main():

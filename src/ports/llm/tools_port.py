@@ -1,5 +1,5 @@
 """
-Port et types pour définir des tools (function-calls) LLM, indépendants du provider.
+Port and types to define LLM tools (function-calls), provider-agnostic.
 """
 
 from abc import ABC, abstractmethod
