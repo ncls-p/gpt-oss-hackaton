@@ -6,7 +6,7 @@ from typing import Optional, Any, List
 import difflib
 
 from PySide6.QtCore import QObject, Qt, QThread, Signal, Slot
-from PySide6.QtGui import QAction, QIcon
+from PySide6.QtGui import QAction, QIcon, QTextCursor
 from PySide6.QtWidgets import (
     QCheckBox,
     QDoubleSpinBox,
@@ -26,6 +26,8 @@ from PySide6.QtWidgets import (
     QSplitter,
     QTextBrowser,
     QToolBar,
+    QVBoxLayout,
+    QSizePolicy,
     QWidget,
 )
 
@@ -169,32 +171,50 @@ class MainWindow(QMainWindow):
 
         # Right: Chat + Steps
         right = QWidget(splitter)
-        right_layout = QGridLayout(right)
-        self.chat_view = QTextBrowser(right)
+        right_vlayout = QVBoxLayout(right)
+
+        # Vertical splitter to allow resizing chat vs steps
+        right_splitter = QSplitter(Qt.Orientation.Vertical, right)
+
+        # Top: Chat area
+        chat_area = QWidget(right_splitter)
+        chat_layout = QVBoxLayout(chat_area)
+        self.chat_view = QTextBrowser(chat_area)
         self.chat_view.setOpenExternalLinks(True)
+        self.chat_view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
         # input row
         input_row = QHBoxLayout()
-        self.input_edit = QLineEdit(right)
+        self.input_edit = QLineEdit(chat_area)
         self.input_edit.setPlaceholderText("Type a message…")
         try:
             # Send on Enter
             self.input_edit.returnPressed.connect(self._on_send_clicked)
         except Exception:
             pass
-        send_btn = QPushButton("Send", right)
+        send_btn = QPushButton("Send", chat_area)
         send_btn.clicked.connect(self._on_send_clicked)
         input_row.addWidget(self.input_edit)
         input_row.addWidget(send_btn)
 
-        self.steps_list = QListWidget(right)
+        chat_layout.addWidget(QLabel("Conversation"))
+        chat_layout.addWidget(self.chat_view)
+        chat_layout.addLayout(input_row)
+
+        # Bottom: Steps area
+        steps_area = QWidget(right_splitter)
+        steps_layout = QVBoxLayout(steps_area)
+        self.steps_list = QListWidget(steps_area)
         self.steps_list.itemDoubleClicked.connect(self._show_step_details)
 
-        right_layout.addWidget(QLabel("Conversation"), 0, 0)
-        right_layout.addWidget(self.chat_view, 1, 0)
-        right_layout.addLayout(input_row, 2, 0)
-        right_layout.addWidget(QLabel("Tool Steps (double-click for details)"), 3, 0)
-        right_layout.addWidget(self.steps_list, 4, 0)
+        steps_layout.addWidget(QLabel("Tool Steps (double-click for details)"))
+        steps_layout.addWidget(self.steps_list)
+
+        right_splitter.addWidget(chat_area)
+        right_splitter.addWidget(steps_area)
+        right_splitter.setStretchFactor(0, 3)
+        right_splitter.setStretchFactor(1, 2)
+        right_vlayout.addWidget(right_splitter)
 
         splitter.addWidget(left)
         splitter.addWidget(right)
@@ -391,6 +411,12 @@ class MainWindow(QMainWindow):
         except Exception:
             # Fallback to plain text if Markdown not supported
             self.chat_view.setPlainText(md)
+        # Auto-scroll to bottom on new content
+        try:
+            self.chat_view.moveCursor(QTextCursor.End)
+            self.chat_view.ensureCursorVisible()
+        except Exception:
+            pass
 
     @Slot(dict)
     def _on_step_event(self, ev: dict) -> None:
