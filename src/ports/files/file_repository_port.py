@@ -59,3 +59,32 @@ class FileRepositoryPort(ABC):
             FileRepositoryError: If search fails
         """
         pass
+
+    @abstractmethod
+    def write_text(self, path: str, content: str, overwrite: bool = True) -> File:
+        """
+        Create or overwrite a text file with UTF-8 content.
+
+        Args:
+            path: Absolute or relative path to the file to write
+            content: Text content to write (UTF-8)
+            overwrite: Whether to overwrite an existing file (default: True)
+
+        Returns:
+            A File entity representing the written file
+        """
+        pass
+
+    @abstractmethod
+    def mkdir(self, path: str, exist_ok: bool = True) -> File:
+        """
+        Create a directory at the given path.
+
+        Args:
+            path: Directory path to create
+            exist_ok: If True, do not raise if the directory already exists
+
+        Returns:
+            A File entity representing the created directory
+        """
+        pass

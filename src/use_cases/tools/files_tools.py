@@ -94,6 +94,48 @@ class FilesToolsHandler(ToolsHandlerPort):
                     "additionalProperties": False,
                 },
             },
+            {
+                "name": "files.write",
+                "description": "Create or overwrite a text file with UTF-8 content.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Absolute path of the file to write",
+                        },
+                        "content": {
+                            "type": "string",
+                            "description": "Text content to write (UTF-8)",
+                        },
+                        "overwrite": {
+                            "type": "boolean",
+                            "description": "Overwrite if already exists (default: true)",
+                        },
+                    },
+                    "required": ["path", "content"],
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "files.mkdir",
+                "description": "Create a directory (including parents by default).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Directory path to create",
+                        },
+                        "exist_ok": {
+                            "type": "boolean",
+                            "description": "Do not error if already exists (default: true)",
+                        },
+                    },
+                    "required": ["path"],
+                    "additionalProperties": False,
+                },
+            },
         ]
 
     def dispatch(self, name: str, arguments: dict[str, Any]) -> Any:
@@ -173,6 +215,66 @@ class FilesToolsHandler(ToolsHandlerPort):
                             "message": str(e),
                             "path": path,
                         },
+                        ensure_ascii=False,
+                    )
+
+            if name == "files.write":
+                path = str(arguments.get("path") or "").strip()
+                content = str(arguments.get("content") or "")
+                overwrite = bool(arguments.get("overwrite", True))
+                if not path:
+                    raise LLMError("'path' is required for files.write")
+                self._logger.info(
+                    f"Executing files.write tool with path: {path}, overwrite={overwrite}"
+                )
+                try:
+                    file_entity = self._list_files_uc._file_repository.write_text(
+                        path, content, overwrite=overwrite
+                    )
+                    return json.dumps(
+                        {
+                            "status": "ok",
+                            "path": file_entity.path,
+                            "type": file_entity.file_type,
+                            "size": file_entity.size,
+                        },
+                        ensure_ascii=False,
+                    )
+                except Exception as e:
+                    self._logger.error(f"files.write error: {e}")
+                    return json.dumps(
+                        {
+                            "status": "error",
+                            "message": str(e),
+                            "path": path,
+                        },
+                        ensure_ascii=False,
+                    )
+
+            if name == "files.mkdir":
+                path = str(arguments.get("path") or "").strip()
+                exist_ok = bool(arguments.get("exist_ok", True))
+                if not path:
+                    raise LLMError("'path' is required for files.mkdir")
+                self._logger.info(
+                    f"Executing files.mkdir tool with path: {path}, exist_ok={exist_ok}"
+                )
+                try:
+                    dir_entity = self._list_files_uc._file_repository.mkdir(
+                        path, exist_ok=exist_ok
+                    )
+                    return json.dumps(
+                        {
+                            "status": "ok",
+                            "path": dir_entity.path,
+                            "type": dir_entity.file_type,
+                        },
+                        ensure_ascii=False,
+                    )
+                except Exception as e:
+                    self._logger.error(f"files.mkdir error: {e}")
+                    return json.dumps(
+                        {"status": "error", "message": str(e), "path": path},
                         ensure_ascii=False,
                     )
 

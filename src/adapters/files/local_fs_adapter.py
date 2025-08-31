@@ -141,7 +141,9 @@ class LocalFileSystemAdapter(FileRepositoryPort):
 
             # Construct the recursive search path
             search_path = os.path.join(directory, "**", pattern)
-            file_paths = [p for p in glob.glob(search_path, recursive=True) if os.path.isfile(p)]
+            file_paths = [
+                p for p in glob.glob(search_path, recursive=True) if os.path.isfile(p)
+            ]
             return self._create_file_entities(file_paths)
 
         except FileRepositoryError:
@@ -150,3 +152,31 @@ class LocalFileSystemAdapter(FileRepositoryPort):
             raise FileRepositoryError(
                 f"Failed to recursively search files in {directory} with pattern {pattern}: {str(e)}"
             )
+
+    @override
+    def write_text(self, path: str, content: str, overwrite: bool = True) -> File:
+        try:
+            # Protect against writing into a directory path
+            if os.path.isdir(path):
+                raise FileRepositoryError(f"Path is a directory: {path}")
+            # Ensure parent directory exists (if any)
+            parent = os.path.dirname(path)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            if os.path.exists(path) and not overwrite:
+                raise FileRepositoryError(
+                    f"File already exists and overwrite is False: {path}"
+                )
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(content)
+            return File(path)
+        except Exception as e:
+            raise FileRepositoryError(f"Failed to write file {path}: {e}")
+
+    @override
+    def mkdir(self, path: str, exist_ok: bool = True) -> File:
+        try:
+            os.makedirs(path, exist_ok=exist_ok)
+            return File(path)
+        except Exception as e:
+            raise FileRepositoryError(f"Failed to create directory {path}: {e}")
