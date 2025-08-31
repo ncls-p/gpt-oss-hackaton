@@ -24,7 +24,6 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QSplitter,
     QTextBrowser,
-    QTextEdit,
     QToolBar,
     QWidget,
 )

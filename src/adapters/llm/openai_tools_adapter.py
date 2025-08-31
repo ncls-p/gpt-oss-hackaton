@@ -776,7 +776,12 @@ class OpenAIToolsAdapter(OpenAIAdapter):
                     system_message or "You are a helpful assistant.",
                     require_final_tool,
                 )
-                history.append(cast(object, {"role": "system", "content": aug_sys}))
+                history.append(
+                    cast(
+                        ChatCompletionMessageParam,
+                        cast(object, {"role": "system", "content": aug_sys}),
+                    )
+                )
             else:
                 # Reuse system from provided messages as-is
                 pass
@@ -784,10 +789,17 @@ class OpenAIToolsAdapter(OpenAIAdapter):
             # Append prior non-system messages
             for m in base_msgs:
                 if m.get("role") != "system":
-                    history.append(cast(object, m))
+                    history.append(
+                        cast(ChatCompletionMessageParam, cast(object, m))
+                    )
 
             # Append this user turn
-            history.append(cast(object, {"role": "user", "content": user_text}))
+            history.append(
+                cast(
+                    ChatCompletionMessageParam,
+                    cast(object, {"role": "user", "content": user_text}),
+                )
+            )
 
             self._require_final_tool = require_final_tool
             self._expose_final = False
@@ -855,12 +867,18 @@ class OpenAIToolsAdapter(OpenAIAdapter):
                         raise LLMError("Réponse vide du modèle")
                     if require_final_tool:
                         history.append(
-                            cast(object, {"role": "assistant", "content": content})
+                            cast(
+                                ChatCompletionMessageParam,
+                                cast(object, {"role": "assistant", "content": content}),
+                            )
                         )
                         last_assistant_text = content.strip()
                     else:
                         history.append(
-                            cast(object, {"role": "assistant", "content": content})
+                            cast(
+                                ChatCompletionMessageParam,
+                                cast(object, {"role": "assistant", "content": content}),
+                            )
                         )
                         return {
                             "text": content.strip(),
@@ -929,7 +947,10 @@ class OpenAIToolsAdapter(OpenAIAdapter):
                         )
                         # Also add an assistant message with the final text
                         history.append(
-                            cast(object, {"role": "assistant", "content": final_text})
+                            cast(
+                                ChatCompletionMessageParam,
+                                cast(object, {"role": "assistant", "content": final_text}),
+                            )
                         )
                         return {"text": final_text, "steps": steps, "messages": history}
 
@@ -1009,15 +1030,18 @@ class OpenAIToolsAdapter(OpenAIAdapter):
                     )
                 except Exception:
                     existing = []
-                messages = list(existing)
+                history_msgs: list[ChatCompletionMessageParam] = list(existing)
                 try:
-                    messages.append(hint_msg)
-                    messages.append(
-                        cast(object, {"role": "assistant", "content": human_text})
+                    history_msgs.append(hint_msg)
+                    history_msgs.append(
+                        cast(
+                            ChatCompletionMessageParam,
+                            cast(object, {"role": "assistant", "content": human_text}),
+                        )
                     )
                 except Exception:
                     pass
-                return {"text": human_text, "steps": [], "messages": messages}
+                return {"text": human_text, "steps": [], "messages": history_msgs}
 
             # Other errors: still return a graceful assistant text instead of raising
             safe_text = f"Une erreur est survenue: {str(e)}"
