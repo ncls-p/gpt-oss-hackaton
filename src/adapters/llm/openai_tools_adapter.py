@@ -29,6 +29,70 @@ class OpenAIToolsAdapter(OpenAIAdapter):
         # Session flags (reset per call)
         self._require_final_tool: bool = False
         self._expose_final: bool = False
+        # Last known final text for best-effort fallbacks
+        self._last_final_text: Optional[str] = None
+
+    # ------------------------------
+    # Helpers
+    # ------------------------------
+
+    def _is_tool_use_error(self, err: Exception) -> bool:
+        """Best-effort detection of tool-use server validation errors.
+
+        We detect common OpenAI errors like:
+        - "Tool choice is none, but model called a tool"
+        - codes like 'tool_use_failed' present in the message
+        - presence of a 'failed_generation' JSON blob in the message
+        """
+        msg = str(err) if err else ""
+        msg_low = msg.lower()
+        return (
+            "tool choice is none, but model called a tool" in msg_low
+            or "tool_use_failed" in msg_low
+            or "failed_generation" in msg_low
+        )
+
+    def _tools_catalog(self) -> list[dict[str, Any]]:
+        """Return a compact catalog of available tools."""
+        catalog: list[dict[str, Any]] = []
+        try:
+            for spec in self._tools_handler.available_tools():
+                # Keep parameters but avoid over-bloating by shallow copying
+                catalog.append(
+                    {
+                        "name": spec.get("name"),
+                        "description": spec.get("description"),
+                        "parameters": spec.get("parameters"),
+                    }
+                )
+        except Exception as e:  # pragma: no cover - defensive
+            self._logger.debug(f"Failed to build tools catalog: {e}")
+        return catalog
+
+    def _assistant_msg_with_error_and_tools(
+        self, err: Exception, hint: str | None = None
+    ) -> ChatCompletionMessageParam:
+        """Build an assistant message that explains a tool error and lists tools.
+
+        This is fed back to the model to help it recover with a valid tool call.
+        """
+        payload = {
+            "notice": "tool_call_error",
+            "error": str(err),
+            "hint": hint
+            or (
+                "Please call one of the available tools with strict JSON arguments. "
+                "When done, call assistant.final with {\"final_text\": \"...\"}."
+            ),
+            "available_tools": self._tools_catalog(),
+        }
+        try:
+            content = json.dumps(payload, ensure_ascii=False)
+        except Exception:
+            content = (
+                f"Tool call error: {err}. Please try again with a valid tool call."
+            )
+        return cast(ChatCompletionMessageParam, cast(object, {"role": "assistant", "content": content}))
 
     def _control_tools(self) -> list[dict[str, Any]]:
         """Control tools, including aliases that some models tend to use.
@@ -210,7 +274,22 @@ class OpenAIToolsAdapter(OpenAIAdapter):
             if not isinstance(name, str) or not name:
                 # Skip invalid tool call names
                 continue
-            result = self._tools_handler.dispatch(name, parsed_args)
+            try:
+                result = self._tools_handler.dispatch(name, parsed_args)
+            except Exception as tool_exc:
+                # Return a structured error to the model so it can correct itself
+                err_payload = {
+                    "error": str(tool_exc),
+                    "available_tools": self._tools_catalog(),
+                    "note": (
+                        "Arguments must be strict JSON matching the tool schema. "
+                        "Use the exact tool names."
+                    ),
+                }
+                try:
+                    result = json.dumps(err_payload, ensure_ascii=False)
+                except Exception:
+                    result = f"Tool error: {tool_exc}"
             # A real non-final tool was executed; now allow finalize
             self._expose_final = True
             messages.append(
@@ -282,22 +361,38 @@ class OpenAIToolsAdapter(OpenAIAdapter):
                         tools=cast(Iterable[ChatCompletionToolParam], tools),  # type: ignore
                         tool_choice="auto",
                     )
-                except Exception:
-                    # Fallback 1: retry with tools disabled to salvage a plain-text answer
-                    try:
+                except Exception as api_exc:
+                    # If the error indicates the model attempted a tool call but the
+                    # server rejected it, feed the error and tools back to the model
+                    # and retry with tools enabled.
+                    if self._is_tool_use_error(api_exc):
+                        messages.append(
+                            self._assistant_msg_with_error_and_tools(api_exc)
+                        )
                         response = self.client.chat.completions.create(
                             model=self.model,
                             messages=cast(Iterable[ChatCompletionMessageParam], messages),
                             temperature=temperature,
                             max_tokens=max_tokens,
-                            tool_choice="none",
+                            tools=cast(Iterable[ChatCompletionToolParam], tools),  # type: ignore
+                            tool_choice="auto",
                         )
-                        choice = response.choices[0]
-                        content = (choice.message.content or "").strip()
-                        return content
-                    except Exception as _:
-                        # Let outer handler raise a clean LLMError
-                        raise
+                    else:
+                        # Fallback 1: retry with tools disabled to salvage a plain-text answer
+                        try:
+                            response = self.client.chat.completions.create(
+                                model=self.model,
+                                messages=cast(Iterable[ChatCompletionMessageParam], messages),
+                                temperature=temperature,
+                                max_tokens=max_tokens,
+                                tool_choice="none",
+                            )
+                            choice = response.choices[0]
+                            content = (choice.message.content or "").strip()
+                            return content
+                        except Exception as _:
+                            # Let outer handler raise a clean LLMError
+                            raise
                 choice = response.choices[0]
                 msg = choice.message
 
@@ -363,15 +458,28 @@ class OpenAIToolsAdapter(OpenAIAdapter):
                         tools=cast(Iterable[ChatCompletionToolParam], tools),  # type: ignore
                         tool_choice="auto",
                     )
-                except Exception:
-                    # Fallback: try without tools and return plain text
-                    response = self.client.chat.completions.create(
-                        model=self.model,
-                        messages=cast(Iterable[ChatCompletionMessageParam], messages),
-                        temperature=temperature,
-                        max_tokens=max_tokens,
-                        tool_choice="none",
-                    )
+                except Exception as api_exc:
+                    if self._is_tool_use_error(api_exc):
+                        messages.append(
+                            self._assistant_msg_with_error_and_tools(api_exc)
+                        )
+                        response = self.client.chat.completions.create(
+                            model=self.model,
+                            messages=cast(Iterable[ChatCompletionMessageParam], messages),
+                            temperature=temperature,
+                            max_tokens=max_tokens,
+                            tools=cast(Iterable[ChatCompletionToolParam], tools),  # type: ignore
+                            tool_choice="auto",
+                        )
+                    else:
+                        # Fallback: try without tools and return plain text
+                        response = self.client.chat.completions.create(
+                            model=self.model,
+                            messages=cast(Iterable[ChatCompletionMessageParam], messages),
+                            temperature=temperature,
+                            max_tokens=max_tokens,
+                            tool_choice="none",
+                        )
                 choice = response.choices[0]
                 msg = choice.message
 
@@ -445,15 +553,29 @@ class OpenAIToolsAdapter(OpenAIAdapter):
                         tools=cast(Iterable[ChatCompletionToolParam], tools),  # type: ignore
                         tool_choice="auto",
                     )
-                except Exception:
-                    # Fallback: attempt plain-text completion
-                    response = self.client.chat.completions.create(
-                        model=self.model,
-                        messages=cast(Iterable[ChatCompletionMessageParam], messages),
-                        temperature=temperature,
-                        max_tokens=max_tokens,
-                        tool_choice="none",
-                    )
+                except Exception as api_exc:
+                    if self._is_tool_use_error(api_exc):
+                        # Provide error + tools to the model and retry with tools enabled
+                        messages.append(
+                            self._assistant_msg_with_error_and_tools(api_exc)
+                        )
+                        response = self.client.chat.completions.create(
+                            model=self.model,
+                            messages=cast(Iterable[ChatCompletionMessageParam], messages),
+                            temperature=temperature,
+                            max_tokens=max_tokens,
+                            tools=cast(Iterable[ChatCompletionToolParam], tools),  # type: ignore
+                            tool_choice="auto",
+                        )
+                    else:
+                        # Fallback: attempt plain-text completion
+                        response = self.client.chat.completions.create(
+                            model=self.model,
+                            messages=cast(Iterable[ChatCompletionMessageParam], messages),
+                            temperature=temperature,
+                            max_tokens=max_tokens,
+                            tool_choice="none",
+                        )
                 choice = response.choices[0]
                 msg = choice.message
 
@@ -536,7 +658,21 @@ class OpenAIToolsAdapter(OpenAIAdapter):
 
                     if not isinstance(name, str) or not name:
                         continue
-                    result = self._tools_handler.dispatch(name, parsed_args)
+                    try:
+                        result = self._tools_handler.dispatch(name, parsed_args)
+                    except Exception as tool_exc:
+                        err_payload = {
+                            "error": str(tool_exc),
+                            "available_tools": self._tools_catalog(),
+                            "note": (
+                                "Arguments must be strict JSON matching the tool schema. "
+                                "Use the exact tool names."
+                            ),
+                        }
+                        try:
+                            result = json.dumps(err_payload, ensure_ascii=False)
+                        except Exception:
+                            result = f"Tool error: {tool_exc}"
                     steps.append(
                         {
                             "name": name,
