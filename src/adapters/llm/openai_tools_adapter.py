@@ -248,7 +248,7 @@ class OpenAIToolsAdapter(OpenAIAdapter):
         and to call the exact control tool name for finalization.
         """
         rules = [
-            "First, select a domain with domain.* (files/apps/system).",
+            "First, select a domain with domain.* (files/apps/system/project/git).",
             "Then, use the corresponding tools (e.g., files.list).",
             "Do not call assistant.final until you have used at least one non-final tool.",
             "When calling tools, arguments must be strict JSON (no prose, no markdown).",

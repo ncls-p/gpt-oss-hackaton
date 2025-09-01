@@ -19,7 +19,7 @@ A Python application demonstrating Clean Architecture principles with file opera
 - Python 3.11 or higher (see [`.python-version`](.python-version))
 - OpenAI API key (for LLM functionality)
 
-### Setup
+### Setup (uv recommandé)
 
 1. **Clone the repository**:
 
@@ -28,32 +28,19 @@ A Python application demonstrating Clean Architecture principles with file opera
    cd gpt-oss-hackathon
    ```
 
-2. **Create and activate a virtual environment**:
+2. **Installer les dépendances (uv recommandé)**
 
-   ```bash
-   python -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
-   ```
+   - Avec `uv` (recommandé):
+     ```bash
+     uv sync
+     ```
 
-3. **Install dependencies**:
-
-   Using pip (from [`pyproject.toml`](pyproject.toml)):
-
-   ```bash
-   pip install -e .
-   ```
-
-   For development dependencies:
-
-   ```bash
-   pip install -e ".[dev]"
-   ```
-
-   Alternatively, if you have `uv` installed (recommended for faster dependency resolution):
-
-   ```bash
-   uv sync
-   ```
+   - Alternative pip (si vous ne voulez pas `uv`):
+     ```bash
+     python -m venv .venv
+     source .venv/bin/activate  # Windows: .venv\Scripts\activate
+     pip install -e .            # ou: pip install -e ".[dev]"
+     ```
 
 4. **Configure environment variables**:
    ```bash
@@ -81,9 +68,15 @@ This will run demonstrations of both file operations and LLM text generation cap
 
 Start the FastAPI server:
 
-```bash
-uv run uvicorn src.main:app --reload
-```
+- Avec `uv` (recommandé):
+  ```bash
+  uv run uvicorn src.main:app --reload
+  ```
+
+- Avec pip/venv actif:
+  ```bash
+  uvicorn src.main:app --reload
+  ```
 
 The API will be available at `http://localhost:8000` and interactive documentation at `http://localhost:8000/docs`.
 Additionally, a minimal tools UI is available at `http://localhost:8000/ui/tools`.
@@ -92,11 +85,20 @@ Additionally, a minimal tools UI is available at `http://localhost:8000/ui/tools
 
 Run a native desktop interface (no browser required):
 
-```bash
-hack-ui
-```
+- Avec `uv` (recommandé):
+  ```bash
+  uv run hack-ui
+  ```
+  (Alternative directe sans script console: `uv run python -m src.ui.app`)
+
+- Avec pip/venv actif:
+  ```bash
+  hack-ui
+  ```
+  (Alternative directe: `python -m src.ui.app`)
 
 Features:
+
 - Prompt, system message, temperature, max tokens, tool steps, and “require final tool” toggle
 - Run actions without blocking (background thread)
 - Final assistant text viewer and a steps panel (double-click to inspect)
@@ -110,10 +112,10 @@ Features:
 
 The application can list and search files in directories:
 
-```python
-# List all files in a directory
-python src/main.py
-# Output: Lists files in /Users/ncls/work/perso/gpt-oss-hackaton/src
+```bash
+# List all files in a directory (demo CLI)
+uv run python -m src.main
+# Output: Lists files in ./src (selon config)
 
 # The application demonstrates:
 # - Listing files with details (name, size, type)
@@ -125,9 +127,9 @@ python src/main.py
 
 The application includes LLM-powered text generation:
 
-```python
+```bash
 # Generate text with custom prompts
-python src/main.py
+uv run python -m src.main
 # Output: Generates haiku about programming and explains clean architecture
 
 # Features demonstrated:
@@ -245,6 +247,23 @@ generated_text = response.json()["text"]
 ##### Tools Assistant (LLM with function-calling)
 
 POST to `/assistant/tools` to let the model call tools like file listing, file reading, opening applications, and opening URLs. The response includes the final text and a trace of tool invocations.
+
+One-shot via CLI (uv):
+
+```bash
+uv run hack-tools --prompt "Liste ce que tu peux faire" --steps 3 --final-required
+```
+
+Available tool domains include:
+
+- files: `files.list`, `files.search`, `files.read`, `files.write`, `files.mkdir`
+- apps: `application.open`
+- system: `system.open_url`, `system.os_info`, `system.resources`, `system.open_path`
+  - `system.resources` renvoie aussi la mémoire: total, available, used, percent, ainsi que le RSS du processus.
+- project: `project.search_text`, `project.read_range`
+- git: `git.status`, `git.diff`
+
+You can also select domains via `domain.files`, `domain.apps`, `domain.system`, `domain.project`, and `domain.git`.
 
 ```bash
 curl -X POST "http://localhost:8000/assistant/tools" \

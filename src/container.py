@@ -29,6 +29,8 @@ from src.use_cases.tools.application_tools import ApplicationToolsHandler  # nou
 from src.use_cases.tools.decision_tree import DecisionTreeToolsHandler
 from src.use_cases.tools.files_tools import FilesToolsHandler  # nouveau
 from src.use_cases.tools.system_tools import SystemToolsHandler
+from src.use_cases.tools.project_tools import ProjectToolsHandler
+from src.use_cases.tools.git_tools import GitToolsHandler
 
 
 class CompositeToolsHandler(ToolsHandlerPort):
@@ -198,9 +200,25 @@ class DependencyContainer:
             files_tools = self.get_files_tools_handler()
             app_tools = self.get_application_tools_handler()
             system_tools = SystemToolsHandler(logger=self._logger)
+            project_tools = ProjectToolsHandler(logger=self._logger)
+            git_tools = GitToolsHandler(logger=self._logger)
             decision = DecisionTreeToolsHandler(
-                {"files": files_tools, "apps": app_tools, "system": system_tools},
+                {
+                    "files": files_tools,
+                    "apps": app_tools,
+                    "system": system_tools,
+                    "project": project_tools,
+                    "git": git_tools,
+                },
                 logger=self._logger,
+                alias_prefixes={
+                    "files": "files",
+                    "application": "apps",
+                    "apps": "apps",
+                    "system": "system",
+                    "project": "project",
+                    "git": "git",
+                },
             )
             self._instances["llm_tools_adapter"] = OpenAIToolsAdapter(
                 tools_handler=decision, logger=self._logger

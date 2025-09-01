@@ -13,6 +13,14 @@ dependencies = [
     "uvicorn[standard]>=0.30.6",
 ]
 
+[build-system]
+requires = ["hatchling>=1.18"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+# Include the top-level Python package named "src" (project uses src/ layout with package name "src")
+packages = ["src"]
+
 [project.scripts]
 # Serve the FastAPI app (env: HOST, PORT, RELOAD=1 for autoreload)
 hack-serve = "src.cli_serve:main"
@@ -33,6 +41,3 @@ dev = [
 [tool.uv]
 dev-dependencies = []
 
-[tool.uv.scripts]
-serve = "uvicorn src.main:app --reload"
-tools = "python -m src.cli_tools --prompt 'List files in ~'"
