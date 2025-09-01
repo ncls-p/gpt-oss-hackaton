@@ -10,7 +10,7 @@ from src.exceptions import FileRepositoryError
 
 class File:
     """
-    File domain entity that encapsulates file information and operations.
+    File system entry entity (file or directory) that encapsulates information.
     """
 
     def __init__(self, path: str):
@@ -29,11 +29,12 @@ class File:
         if not os.path.exists(path):
             raise FileRepositoryError(f"File does not exist: {path}")
 
-        if not os.path.isfile(path):
-            raise FileRepositoryError(f"Path is not a file: {path}")
+        if not (os.path.isfile(path) or os.path.isdir(path)):
+            raise FileRepositoryError(f"Path is neither a regular file nor a directory: {path}")
 
         self.path = os.path.abspath(path)
         self.name = self._find_file_name()
+        self.is_dir = os.path.isdir(self.path)
         self.size = self._find_file_size()
         self.file_type = self._find_file_type()
 
@@ -43,6 +44,9 @@ class File:
 
     def _find_file_size(self) -> int:
         """Get the file size in bytes."""
+        if self.is_dir:
+            # Do not compute directory size to avoid expensive traversal
+            return 0
         try:
             return os.path.getsize(self.path)
         except OSError as e:
@@ -50,6 +54,8 @@ class File:
 
     def _find_file_type(self) -> str:
         """Extract the file extension."""
+        if self.is_dir:
+            return "directory"
         _, ext = os.path.splitext(self.path)
         return ext.lstrip(".") if ext else "no_extension"
 

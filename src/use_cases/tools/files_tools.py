@@ -1,5 +1,5 @@
 """
-Tools "files.*" mappés sur les use cases Files.
+Tools "files.*" mapped to the Files use cases.
 """
 
 import json
@@ -47,13 +47,13 @@ class FilesToolsHandler(ToolsHandlerPort):
         return [
             {
                 "name": "files.list",
-                "description": "Lister les fichiers d'un répertoire.",
+                "description": "List files in a directory.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "directory": {
                             "type": "string",
-                            "description": "Chemin du répertoire",
+                            "description": "Directory path",
                         },
                     },
                     "required": ["directory"],
@@ -62,20 +62,77 @@ class FilesToolsHandler(ToolsHandlerPort):
             },
             {
                 "name": "files.search",
-                "description": "Rechercher des fichiers par motif dans un répertoire.",
+                "description": "Search files by pattern in a directory.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "directory": {
                             "type": "string",
-                            "description": "Chemin du répertoire",
+                            "description": "Directory path",
                         },
                         "pattern": {
                             "type": "string",
-                            "description": "Motif de recherche (ex: '*.py')",
+                            "description": "Search pattern (e.g., '*.py')",
                         },
                     },
                     "required": ["directory", "pattern"],
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "files.read",
+                "description": "Read a text file content (limited to ~100KB).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Absolute path to the file to read",
+                        }
+                    },
+                    "required": ["path"],
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "files.write",
+                "description": "Create or overwrite a text file with UTF-8 content.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Absolute path of the file to write",
+                        },
+                        "content": {
+                            "type": "string",
+                            "description": "Text content to write (UTF-8)",
+                        },
+                        "overwrite": {
+                            "type": "boolean",
+                            "description": "Overwrite if already exists (default: true)",
+                        },
+                    },
+                    "required": ["path", "content"],
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "files.mkdir",
+                "description": "Create a directory (including parents by default).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Directory path to create",
+                        },
+                        "exist_ok": {
+                            "type": "boolean",
+                            "description": "Do not error if already exists (default: true)",
+                        },
+                    },
+                    "required": ["path"],
                     "additionalProperties": False,
                 },
             },
@@ -113,10 +170,118 @@ class FilesToolsHandler(ToolsHandlerPort):
                 files = self._search_files_uc.execute(directory, pattern)
                 return json.dumps([f.get_details() for f in files], ensure_ascii=False)
 
-            # Indique volontairement au composite que ce handler ne gère pas ce tool
+            if name == "files.read":
+                path = str(arguments["path"])  # required
+                self._logger.info(f"Executing files.read tool with path: {path}")
+                try:
+                    # Basic safeguards: size cap ~100KB
+                    import os
+
+                    if not os.path.exists(path):
+                        raise FileNotFoundError(path)
+                    if not os.path.isfile(path):
+                        raise IsADirectoryError(path)
+                    size = os.path.getsize(path)
+                    if size > 100 * 1024:
+                        return json.dumps(
+                            {
+                                "status": "too_large",
+                                "message": "File exceeds 100KB cap",
+                                "size": size,
+                                "path": path,
+                            },
+                            ensure_ascii=False,
+                        )
+                    with open(path, "r", encoding="utf-8", errors="strict") as f:
+                        content = f.read()
+                    return json.dumps(
+                        {"status": "ok", "path": path, "content": content},
+                        ensure_ascii=False,
+                    )
+                except UnicodeDecodeError:
+                    return json.dumps(
+                        {
+                            "status": "binary_or_non_utf8",
+                            "message": "File is not valid UTF-8 text",
+                            "path": path,
+                        },
+                        ensure_ascii=False,
+                    )
+                except Exception as e:
+                    self._logger.error(f"files.read error: {e}")
+                    return json.dumps(
+                        {
+                            "status": "error",
+                            "message": str(e),
+                            "path": path,
+                        },
+                        ensure_ascii=False,
+                    )
+
+            if name == "files.write":
+                path = str(arguments.get("path") or "").strip()
+                content = str(arguments.get("content") or "")
+                overwrite = bool(arguments.get("overwrite", True))
+                if not path:
+                    raise LLMError("'path' is required for files.write")
+                self._logger.info(
+                    f"Executing files.write tool with path: {path}, overwrite={overwrite}"
+                )
+                try:
+                    file_entity = self._list_files_uc._file_repository.write_text(
+                        path, content, overwrite=overwrite
+                    )
+                    return json.dumps(
+                        {
+                            "status": "ok",
+                            "path": file_entity.path,
+                            "type": file_entity.file_type,
+                            "size": file_entity.size,
+                        },
+                        ensure_ascii=False,
+                    )
+                except Exception as e:
+                    self._logger.error(f"files.write error: {e}")
+                    return json.dumps(
+                        {
+                            "status": "error",
+                            "message": str(e),
+                            "path": path,
+                        },
+                        ensure_ascii=False,
+                    )
+
+            if name == "files.mkdir":
+                path = str(arguments.get("path") or "").strip()
+                exist_ok = bool(arguments.get("exist_ok", True))
+                if not path:
+                    raise LLMError("'path' is required for files.mkdir")
+                self._logger.info(
+                    f"Executing files.mkdir tool with path: {path}, exist_ok={exist_ok}"
+                )
+                try:
+                    dir_entity = self._list_files_uc._file_repository.mkdir(
+                        path, exist_ok=exist_ok
+                    )
+                    return json.dumps(
+                        {
+                            "status": "ok",
+                            "path": dir_entity.path,
+                            "type": dir_entity.file_type,
+                        },
+                        ensure_ascii=False,
+                    )
+                except Exception as e:
+                    self._logger.error(f"files.mkdir error: {e}")
+                    return json.dumps(
+                        {"status": "error", "message": str(e), "path": path},
+                        ensure_ascii=False,
+                    )
+
+            # Signal deliberately that this handler doesn't handle the tool
             raise ValueError(f"Unknown tool: {name}")
         except ValueError:
-            # Unknown tool for this handler: ne pas logger comme une erreur, laisser le composite tenter un autre handler
+            # Unknown tool for this handler: let the composite try another handler
             raise
         except Exception as e:
             self._logger.error(f"Error dispatching tool {name}: {e}")

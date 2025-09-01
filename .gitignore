@@ -13,3 +13,7 @@ wheels/
 .env
 
 .vscode/
+
+.pytest_cache/
+
+uv.lock

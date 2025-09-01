@@ -5,28 +5,30 @@ Dependency injection container for managing application dependencies.
 import logging
 from typing import List
 
-from src.adapters.files.local_fs_adapter import LocalFileSystemAdapter
-from src.adapters.llm.openai_adapter import OpenAIAdapter
-from src.adapters.llm.openai_tools_adapter import OpenAIToolsAdapter  # nouveau
 from src.adapters.application.local_application_launcher import LocalApplicationLauncher
 from src.adapters.application.local_application_resolver import (
     LocalApplicationResolver,
 )  # ajout
-from src.ports.files.file_repository_port import FileRepositoryPort
-from src.ports.llm.llm_port import LLMPort
-from src.ports.llm.tools_port import ToolsHandlerPort, ToolSpec  # nouveau
+from src.adapters.files.local_fs_adapter import LocalFileSystemAdapter
+from src.adapters.llm.openai_adapter import OpenAIAdapter
+from src.adapters.llm.openai_tools_adapter import OpenAIToolsAdapter  # nouveau
 from src.ports.application.application_launcher_port import (
     ApplicationLauncherPort,
 )  # ajout
 from src.ports.application.application_resolver_port import (
     ApplicationResolverPort,
 )  # ajout
+from src.ports.files.file_repository_port import FileRepositoryPort
+from src.ports.llm.llm_port import LLMPort
+from src.ports.llm.tools_port import ToolsHandlerPort, ToolSpec  # nouveau
 from src.use_cases.application.open_application import OpenApplicationUseCase  # ajout
 from src.use_cases.files.list_files import ListFilesUseCase
 from src.use_cases.files.search_files import SearchFilesUseCase
 from src.use_cases.llm.generate_text import GenerateTextUseCase
-from src.use_cases.tools.files_tools import FilesToolsHandler  # nouveau
 from src.use_cases.tools.application_tools import ApplicationToolsHandler  # nouveau
+from src.use_cases.tools.decision_tree import DecisionTreeToolsHandler
+from src.use_cases.tools.files_tools import FilesToolsHandler  # nouveau
+from src.use_cases.tools.system_tools import SystemToolsHandler
 
 
 class CompositeToolsHandler(ToolsHandlerPort):
@@ -126,7 +128,7 @@ class DependencyContainer:
 
     def get_files_tools_handler(self) -> ToolsHandlerPort:
         """
-        Registre des tools 'files.*' adossé aux use cases Files.
+        Register tools 'files.*' mapped to Files use cases.
         """
         if "files_tools_handler" not in self._instances:
             list_uc = self.get_list_files_use_case()
@@ -178,7 +180,7 @@ class DependencyContainer:
 
     def get_application_tools_handler(self) -> ToolsHandlerPort:
         """
-        Registre des tools 'application.*' adossé aux use cases Application.
+        Register tools 'application.*' mapped to Application use cases.
         """
         if "application_tools_handler" not in self._instances:
             open_app_uc = self.get_open_application_use_case()
@@ -195,9 +197,13 @@ class DependencyContainer:
         if "llm_tools_adapter" not in self._instances:
             files_tools = self.get_files_tools_handler()
             app_tools = self.get_application_tools_handler()
-            composite = CompositeToolsHandler(files_tools, app_tools)
+            system_tools = SystemToolsHandler(logger=self._logger)
+            decision = DecisionTreeToolsHandler(
+                {"files": files_tools, "apps": app_tools, "system": system_tools},
+                logger=self._logger,
+            )
             self._instances["llm_tools_adapter"] = OpenAIToolsAdapter(
-                tools_handler=composite, logger=self._logger
+                tools_handler=decision, logger=self._logger
             )
         return self._instances["llm_tools_adapter"]
 
