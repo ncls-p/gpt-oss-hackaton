@@ -75,6 +75,23 @@ class SystemToolsHandler(ToolsHandlerPort):
                     "additionalProperties": False,
                 },
             },
+            {
+                "name": "system.set_volume",
+                "description": "Ajuster le volume système (valeur entre 0 et 100) via AppleScript natif.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "level": {
+                            "type": "number",
+                            "description": "Niveau de volume (0 à 100)",
+                            "minimum": 0,
+                            "maximum": 100,
+                        }
+                    },
+                    "required": ["level"],
+                    "additionalProperties": False,
+                },
+            },
         ]
 
     def dispatch(self, name: str, arguments: dict[str, Any]) -> Any:
@@ -164,6 +181,51 @@ class SystemToolsHandler(ToolsHandlerPort):
                     ok = False
                 return json.dumps(
                     {"status": "ok" if ok else "failed", "path": p},
+                    ensure_ascii=False,
+                )
+
+            if name == "system.set_volume":
+                import subprocess
+                import sys
+
+                level = int(arguments.get("level", 50))
+                if not (0 <= level <= 100):
+                    raise LLMError("Le niveau de volume doit être entre 0 et 100.")
+                self._logger.info(f"Setting volume to {level}")
+                try:
+                    if sys.platform.startswith("darwin"):
+                        completed = subprocess.run(
+                            ["osascript", "-e", f"set volume output volume {level}"],
+                            capture_output=True,
+                            text=True,
+                        )
+                        ok = completed.returncode == 0
+                    elif sys.platform.startswith("linux"):
+                        completed = subprocess.run(
+                            ["amixer", "set", "Master", f"{level}%"],
+                            capture_output=True,
+                            text=True,
+                        )
+                        ok = completed.returncode == 0
+                    elif sys.platform.startswith("win"):
+                        import ctypes
+
+                        winmm = ctypes.WinDLL("winmm.dll")
+                        # Fonction waveOutSetVolume (pour le volume principal)
+                        volume = int(
+                            (level / 100.0) * 0xFFFF
+                        )  # Convertir en échelle 0-0xFFFF
+                        volume_value = (volume << 16) | volume  # Stéréo identique
+                        ok = (
+                            winmm.waveOutSetVolume(0, volume_value) == 0
+                        )  # 0 = MMSYSERR_NOERROR
+                    else:
+                        raise LLMError("Plateforme non supportée.")
+                except Exception as e:
+                    self._logger.error(f"Erreur lors du réglage du volume : {e}")
+                    ok = False
+                return json.dumps(
+                    {"status": "ok" if ok else "failed", "volume": level},
                     ensure_ascii=False,
                 )
 
