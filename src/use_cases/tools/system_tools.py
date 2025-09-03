@@ -145,7 +145,7 @@ class SystemToolsHandler(ToolsHandlerPort):
             },
             {
                 "name": "system.set_idle",
-                "description": "Enable/disable idle mode (screen saver or sleep).",
+                "description": "Enable/disable idle mode (screen saver or sleep). If timeout=0, the PC goes to sleep immediately.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -510,14 +510,21 @@ class SystemToolsHandler(ToolsHandlerPort):
                 try:
                     if sys.platform.startswith("darwin"):
                         if enable:
-                            completed = subprocess.run(
-                                ["caffeinate", "-t", str(timeout)],
-                                capture_output=True,
-                                text=True,
-                            )
+                            if timeout == 0:
+                                completed = subprocess.run(
+                                    ["pmset", "sleepnow"],
+                                    capture_output=True,
+                                    text=True,
+                                )
+                            else:
+                                completed = subprocess.run(
+                                    ["pmset", "sleep", str(timeout)],
+                                    capture_output=True,
+                                    text=True,
+                                )
                         else:
                             completed = subprocess.run(
-                                ["killall", "caffeinate"],
+                                ["pmset", "sleep", str(timeout)],
                                 capture_output=True,
                                 text=True,
                             )
