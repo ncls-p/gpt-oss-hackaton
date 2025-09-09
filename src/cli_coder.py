@@ -14,6 +14,7 @@ from rich import box
 # Rich for modern, colorful CLI and Markdown rendering
 from rich.console import Console
 from rich.markdown import Markdown
+from rich.padding import Padding
 from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.table import Table
@@ -151,8 +152,15 @@ def _render_markdown_or_json(
             return
     except Exception:
         pass
+    # Wrap Markdown in Padding so Rich measures lines correctly inside Panel,
+    # otherwise long paragraphs may render as a single cropped line.
     console.print(
-        Panel(Markdown(to_render), title=title, border_style="magenta", box=box.ROUNDED)
+        Panel(
+            Padding(Markdown(to_render), (0, 1)),
+            title=title,
+            border_style="magenta",
+            box=box.ROUNDED,
+        )
     )
 
 
@@ -290,7 +298,11 @@ def interactive_main(argv: Optional[list[str]] = None) -> int:
                 continue
             if cmd == "system":
                 system_message = " ".join(sargs) if sargs else None
-                msg = "[green]System set.[/green]" if system_message else "[yellow]System cleared.[/yellow]"
+                msg = (
+                    "[green]System set.[/green]"
+                    if system_message
+                    else "[yellow]System cleared.[/yellow]"
+                )
                 console.print(msg)
                 continue
             if cmd == "temp" and sargs:
@@ -334,8 +346,12 @@ def interactive_main(argv: Optional[list[str]] = None) -> int:
                 stbl.add_row("final_required", str(args.final_required))
                 stbl.add_row("colors", str(color_on))
                 stbl.add_row("icons", str(icons_on))
-                stbl.add_row("HACK_WORKSPACE_ROOT", os.getenv("HACK_WORKSPACE_ROOT", ""))
-                stbl.add_row("HACK_WORKSPACE_ENFORCE", os.getenv("HACK_WORKSPACE_ENFORCE", "1"))
+                stbl.add_row(
+                    "HACK_WORKSPACE_ROOT", os.getenv("HACK_WORKSPACE_ROOT", "")
+                )
+                stbl.add_row(
+                    "HACK_WORKSPACE_ENFORCE", os.getenv("HACK_WORKSPACE_ENFORCE", "1")
+                )
                 console.print(stbl)
                 continue
             if cmd == "workspace" and sargs:

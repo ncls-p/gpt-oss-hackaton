@@ -129,6 +129,38 @@ class WebToolsHandler(ToolsHandlerPort):
                     "additionalProperties": False,
                 },
             },
+            {
+                "name": "web.download",
+                "description": "Download a resource to a file (size limits, user-agent).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "url": {"type": "string"},
+                        "path": {"type": "string", "description": "Absolute output path"},
+                        "timeout": {"type": "integer"},
+                        "user_agent": {"type": "string"},
+                        "max_bytes": {"type": "integer", "description": "Cap download (default 5MB)"},
+                    },
+                    "required": ["url", "path"],
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "web.post_json",
+                "description": "POST JSON and return parsed JSON response (size/timeout caps).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "url": {"type": "string"},
+                        "data": {"type": "string", "description": "JSON-encoded body"},
+                        "timeout": {"type": "integer"},
+                        "user_agent": {"type": "string"},
+                        "max_bytes": {"type": "integer"},
+                    },
+                    "required": ["url", "data"],
+                    "additionalProperties": False,
+                },
+            },
         ]
 
     # ---------------- private helpers ----------------
@@ -195,12 +227,7 @@ class WebToolsHandler(ToolsHandlerPort):
     # ---------------- dispatch ----------------
     def dispatch(self, name: str, arguments: dict[str, Any]) -> Any:
         try:
-            if name not in {
-                "web.scrape",
-                "web.links",
-                "web.fetch_json",
-                "web.readability",
-            }:
+            if name not in {"web.scrape", "web.links", "web.fetch_json", "web.readability", "web.download", "web.post_json"}:
                 raise ValueError(f"Unknown tool: {name}")
 
             url = str(arguments.get("url") or "").strip()
@@ -338,6 +365,54 @@ class WebToolsHandler(ToolsHandlerPort):
                         )
                 except Exception as e:
                     raise LLMError(f"Fetch JSON failed: {e}")
+
+            if name == "web.post_json":
+                timeout = int(arguments.get("timeout") or 12)
+                user_agent = arguments.get("user_agent")
+                if user_agent is not None:
+                    user_agent = str(user_agent)
+                max_bytes = int(arguments.get("max_bytes") or 1_000_000)
+                headers = {
+                    "User-Agent": user_agent or "Mozilla/5.0 (compatible; HackCoder/1.0)",
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                }
+                body = str(arguments.get("data") or "{}")
+                req = urllib.request.Request(url, headers=headers, method="POST", data=body.encode("utf-8"))
+                try:
+                    with urllib.request.urlopen(req, timeout=timeout) as resp:
+                        raw = resp.read(max_bytes + 1)
+                        if len(raw) > max_bytes:
+                            raw = raw[:max_bytes]
+                        try:
+                            data = json.loads(raw.decode("utf-8", errors="ignore"))
+                        except Exception:
+                            data = None
+                        return json.dumps({"status": "ok", "url": url, "json": data}, ensure_ascii=False)
+                except Exception as e:
+                    raise LLMError(f"POST JSON failed: {e}")
+
+            if name == "web.download":
+                timeout = int(arguments.get("timeout") or 20)
+                user_agent = arguments.get("user_agent")
+                if user_agent is not None:
+                    user_agent = str(user_agent)
+                max_bytes = int(arguments.get("max_bytes") or 5_000_000)
+                out_path = str(arguments.get("path") or "").strip()
+                if not out_path:
+                    raise LLMError("Field 'path' is required for web.download")
+                headers = {"User-Agent": user_agent or "Mozilla/5.0 (compatible; HackCoder/1.0)"}
+                req = urllib.request.Request(url, headers=headers, method="GET")
+                try:
+                    with urllib.request.urlopen(req, timeout=timeout) as resp:
+                        raw = resp.read(max_bytes + 1)
+                        if len(raw) > max_bytes:
+                            raw = raw[:max_bytes]
+                        with open(out_path, "wb") as f:
+                            f.write(raw)
+                        return json.dumps({"status": "ok", "url": url, "path": out_path, "size": len(raw)}, ensure_ascii=False)
+                except Exception as e:
+                    raise LLMError(f"Download failed: {e}")
 
             if name == "web.readability":
                 timeout = int(arguments.get("timeout") or 12)

@@ -76,11 +76,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     if args.pretty:
         try:
-            from rich.console import Console
-            from rich.panel import Panel
-            from rich.markdown import Markdown
-            from rich.syntax import Syntax
             from rich import box
+            from rich.console import Console
+            from rich.markdown import Markdown
+            from rich.padding import Padding
+            from rich.panel import Panel
+            from rich.syntax import Syntax
 
             console = Console()
             text = result.get("text", "") or ""
@@ -89,12 +90,29 @@ def main(argv: list[str] | None = None) -> int:
                 if isinstance(obj, dict) and obj.get("final_text"):
                     text = obj.get("final_text") or ""
                 else:
-                    console.print(Panel(Syntax(json.dumps(obj, ensure_ascii=False, indent=2), "json"), title="assistant", box=box.ROUNDED, border_style="magenta"))
+                    console.print(
+                        Panel(
+                            Syntax(
+                                json.dumps(obj, ensure_ascii=False, indent=2), "json"
+                            ),
+                            title="assistant",
+                            box=box.ROUNDED,
+                            border_style="magenta",
+                        )
+                    )
                     text = ""
             except Exception:
                 pass
             if text:
-                console.print(Panel(Markdown(text), title="assistant", box=box.ROUNDED, border_style="magenta"))
+                # Wrap Markdown in Padding so long paragraphs wrap correctly inside Panel
+                console.print(
+                    Panel(
+                        Padding(Markdown(text), (0, 1)),
+                        title="assistant",
+                        box=box.ROUNDED,
+                        border_style="magenta",
+                    )
+                )
             # steps table
             if result.get("steps"):
                 console.print_json(data=result.get("steps"))

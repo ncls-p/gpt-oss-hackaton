@@ -4,6 +4,9 @@ Tools "system.*" for basic computer actions via stdlib.
 
 import json
 import logging
+import os
+import shutil
+import sys
 import webbrowser
 from typing import Any, Optional
 
@@ -34,6 +37,46 @@ class SystemToolsHandler(ToolsHandlerPort):
                         }
                     },
                     "required": ["url"],
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "system.exec_ro",
+                "description": "Execute a read-only command from an allowlist (ls/cat/rg/git).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "cmd": {"type": "array", "items": {"type": "string"}},
+                        "max_bytes": {
+                            "type": "integer",
+                            "description": "Cap output (default 20000)",
+                        },
+                        "timeout": {
+                            "type": "integer",
+                            "description": "Seconds (default 5)",
+                        },
+                    },
+                    "required": ["cmd"],
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "system.screenshot",
+                "description": "Take a screenshot to a PNG file (best-effort, platform-specific).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"path": {"type": "string"}},
+                    "required": ["path"],
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "system.speak",
+                "description": "Speak a short text (TTS) if available.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"text": {"type": "string"}},
+                    "required": ["text"],
                     "additionalProperties": False,
                 },
             },
@@ -208,12 +251,107 @@ class SystemToolsHandler(ToolsHandlerPort):
                     ensure_ascii=False,
                 )
 
+            if name == "system.exec_ro":
+                import subprocess as sp
+
+                allowed = {"ls", "cat", "rg", "git"}
+                cmd = arguments.get("cmd") or []
+                if not isinstance(cmd, list) or not cmd:
+                    raise LLMError("cmd must be a non-empty array")
+                prog = str(cmd[0])
+                if prog not in allowed:
+                    raise LLMError(f"Command not allowed: {prog}")
+                timeout = int(arguments.get("timeout") or 5)
+                max_bytes = int(arguments.get("max_bytes") or 20000)
+                try:
+                    p = sp.run(
+                        cmd, stdout=sp.PIPE, stderr=sp.PIPE, text=True, timeout=timeout
+                    )
+                    out = (p.stdout or "") + ("\n" + p.stderr if p.stderr else "")
+                    if len(out.encode("utf-8")) > max_bytes:
+                        out = out.encode("utf-8")[:max_bytes].decode(
+                            "utf-8", errors="ignore"
+                        )
+                    return json.dumps(
+                        {"status": "ok", "returncode": p.returncode, "output": out},
+                        ensure_ascii=False,
+                    )
+                except Exception as e:
+                    return json.dumps(
+                        {"status": "error", "message": str(e)}, ensure_ascii=False
+                    )
+
+            if name == "system.screenshot":
+                import subprocess as sp
+
+                path = str(arguments.get("path") or "").strip()
+                if not path:
+                    raise LLMError("Field 'path' is required.")
+                ok = False
+                try:
+                    if sys.platform.startswith("darwin"):
+                        ok = sp.run(["screencapture", "-x", path]).returncode == 0
+                    elif sys.platform.startswith("win"):
+                        script = (
+                            'Add-Type -AssemblyName System.Windows.Forms; Add-Type -AssemblyName System.Drawing; $b=[System.Windows.Forms.SystemInformation]::VirtualScreen; $img=New-Object System.Drawing.Bitmap($b.Width,$b.Height); $g=[System.Drawing.Graphics]::FromImage($img); $g.CopyFromScreen($b.Left,$b.Top,[System.Drawing.Point]::Empty,$b.Size); $img.Save("'
+                            + path.replace("\\", "\\\\")
+                            + '", [System.Drawing.Imaging.ImageFormat]::Png)'
+                        )
+                        ok = (
+                            sp.run(["powershell", "-NoProfile", script]).returncode == 0
+                        )
+                    else:
+                        if shutil.which("scrot"):
+                            ok = sp.run(["scrot", path]).returncode == 0
+                        elif shutil.which("import"):
+                            ok = (
+                                sp.run(["import", "-window", "root", path]).returncode
+                                == 0
+                            )
+                except Exception:
+                    ok = False
+                return json.dumps(
+                    {"status": "ok" if ok else "failed", "path": path},
+                    ensure_ascii=False,
+                )
+
+            if name == "system.speak":
+                import subprocess as sp
+
+                text = str(arguments.get("text") or "").strip()
+                if not text:
+                    raise LLMError("Field 'text' is required.")
+                ok = False
+                try:
+                    if sys.platform.startswith("darwin"):
+                        ok = sp.run(["say", text]).returncode == 0
+                    elif sys.platform.startswith("win"):
+                        escaped = text.replace("'", "''")
+                        script = (
+                            "Add-Type –AssemblyName System.Speech;"
+                            "$speak = New-Object System.Speech.Synthesis.SpeechSynthesizer;"
+                            "$speak.Speak('" + escaped + "')"
+                        )
+                        ok = (
+                            sp.run(["powershell", "-NoProfile", script]).returncode == 0
+                        )
+                    else:
+                        if shutil.which("spd-say"):
+                            ok = sp.run(["spd-say", text]).returncode == 0
+                        elif shutil.which("espeak"):
+                            ok = sp.run(["espeak", text]).returncode == 0
+                except Exception:
+                    ok = False
+                return json.dumps(
+                    {"status": "ok" if ok else "failed"}, ensure_ascii=False
+                )
+
             if name == "system.clipboard_set":
                 text = str(arguments.get("text") or "")
                 ok = False
                 try:
-                    import sys as _sys
                     import shutil as _shutil
+                    import sys as _sys
 
                     if _sys.platform.startswith("darwin"):
                         import subprocess as sp
@@ -248,9 +386,9 @@ class SystemToolsHandler(ToolsHandlerPort):
             if name == "system.clipboard_get":
                 content = None
                 try:
+                    import shutil as _shutil
                     import subprocess as sp
                     import sys as _sys
-                    import shutil as _shutil
 
                     if _sys.platform.startswith("darwin"):
                         p = sp.run(["pbpaste"], stdout=sp.PIPE)
@@ -291,9 +429,9 @@ class SystemToolsHandler(ToolsHandlerPort):
                 message = str(arguments.get("message") or "")
                 ok = False
                 try:
+                    import shutil as _shutil
                     import subprocess as sp
                     import sys as _sys
-                    import shutil as _shutil
 
                     if _sys.platform.startswith("darwin"):
                         script = f"display notification {json.dumps(message)} with title {json.dumps(title)}"
@@ -321,10 +459,10 @@ class SystemToolsHandler(ToolsHandlerPort):
                 )
 
             if name == "system.open_terminal":
-                import subprocess as sp
-                import sys as _sys
                 import os as _os
                 import shutil as _shutil
+                import subprocess as sp
+                import sys as _sys
 
                 directory = str(arguments.get("directory") or _os.getcwd())
                 ok = False

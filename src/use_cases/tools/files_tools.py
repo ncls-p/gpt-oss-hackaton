@@ -2,9 +2,9 @@
 Tools "files.*" mapped to the Files use cases.
 """
 
+import difflib
 import json
 import logging
-import difflib
 import os
 import shutil
 from typing import Any, Optional
@@ -213,13 +213,166 @@ class FilesToolsHandler(ToolsHandlerPort):
                 },
             },
             {
+                "name": "files.head",
+                "description": "Read the first N lines or bytes of a UTF-8 text file.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"},
+                        "lines": {
+                            "type": "integer",
+                            "description": "Number of lines (default 20)",
+                        },
+                        "bytes": {
+                            "type": "integer",
+                            "description": "Number of bytes (alternative to lines)",
+                        },
+                    },
+                    "required": ["path"],
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "files.tail",
+                "description": "Read the last N lines of a UTF-8 text file (approximate for large files).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"},
+                        "lines": {
+                            "type": "integer",
+                            "description": "Number of lines (default 20)",
+                        },
+                    },
+                    "required": ["path"],
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "files.find_replace",
+                "description": "Find and replace text (regex or fixed), optionally apply changes.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"},
+                        "query": {"type": "string"},
+                        "replacement": {"type": "string"},
+                        "regex": {"type": "boolean"},
+                        "case_sensitive": {"type": "boolean"},
+                        "max_replacements": {"type": "integer"},
+                        "apply": {
+                            "type": "boolean",
+                            "description": "Apply changes (default false)",
+                        },
+                    },
+                    "required": ["path", "query", "replacement"],
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "files.apply_patch",
+                "description": "Apply a unified diff patch to the file (best-effort, requires 'patch' tool).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"},
+                        "patch": {"type": "string", "description": "Unified diff text"},
+                        "dry_run": {
+                            "type": "boolean",
+                            "description": "Do not write, just test (default false)",
+                        },
+                    },
+                    "required": ["path", "patch"],
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "files.detect_encoding",
+                "description": "Detect text encoding by trying common charsets (utf-8, utf-16, utf-32).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"path": {"type": "string"}},
+                    "required": ["path"],
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "files.json_patch",
+                "description": "Apply an RFC6902 JSON Patch to a JSON file (backup not handled).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"},
+                        "patch": {
+                            "type": "string",
+                            "description": "JSON array patch or object string",
+                        },
+                    },
+                    "required": ["path", "patch"],
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "files.yaml_update",
+                "description": "Update YAML mapping at a dot path (simple keys, list indices allowed).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"},
+                        "key_path": {"type": "string", "description": "e.g., a.b[2].c"},
+                        "value": {
+                            "type": "string",
+                            "description": "JSON-encoded value to set",
+                        },
+                    },
+                    "required": ["path", "key_path", "value"],
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "files.snapshot_create",
+                "description": "Create a snapshot of directory (path,size,mtime,optional sha1).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "directory": {"type": "string"},
+                        "include_glob": {"type": "string"},
+                        "exclude_glob": {"type": "string"},
+                        "hash": {
+                            "type": "boolean",
+                            "description": "Compute sha1 (default false)",
+                        },
+                        "max_files": {"type": "integer"},
+                        "max_file_size_bytes": {"type": "integer"},
+                    },
+                    "required": ["directory"],
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "files.snapshot_diff",
+                "description": "Diff two snapshots (JSON texts) and return added/removed/changed.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "a": {"type": "string", "description": "Snapshot JSON A"},
+                        "b": {"type": "string", "description": "Snapshot JSON B"},
+                    },
+                    "required": ["a", "b"],
+                    "additionalProperties": False,
+                },
+            },
+            {
                 "name": "files.insert_range",
                 "description": "Insert a block before the given 1-based line number (append if line_number=len+1).",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "path": {"type": "string"},
-                        "line_number": {"type": "integer", "description": "1-based position to insert before (len+1 to append)"},
+                        "line_number": {
+                            "type": "integer",
+                            "description": "1-based position to insert before (len+1 to append)",
+                        },
                         "content": {"type": "string"},
                     },
                     "required": ["path", "line_number", "content"],
@@ -297,8 +450,14 @@ class FilesToolsHandler(ToolsHandlerPort):
                                 "additionalProperties": False,
                             },
                         },
-                        "unified": {"type": "integer", "description": "Context lines (default 2)"},
-                        "max_bytes": {"type": "integer", "description": "Cap diff size (default 20000)"},
+                        "unified": {
+                            "type": "integer",
+                            "description": "Context lines (default 2)",
+                        },
+                        "max_bytes": {
+                            "type": "integer",
+                            "description": "Cap diff size (default 20000)",
+                        },
                     },
                     "required": ["path", "changes"],
                     "additionalProperties": False,
@@ -552,6 +711,463 @@ class FilesToolsHandler(ToolsHandlerPort):
                         ensure_ascii=False,
                     )
 
+            if name == "files.head":
+                path = _abs_path(arguments.get("path") or "")
+                ok, path = ensure_within_root(path)
+                if not ok:
+                    raise LLMError(
+                        "Path is outside of WORKSPACE_ROOT (set HACK_WORKSPACE_ENFORCE=0 to disable)"
+                    )
+                n_lines = int(arguments.get("lines") or 20)
+                n_bytes = int(arguments.get("bytes") or 0)
+                try:
+                    if n_bytes > 0:
+                        with open(path, "rb") as f:
+                            data = f.read(max(1, n_bytes))
+                        try:
+                            text = data.decode("utf-8")
+                        except Exception:
+                            text = data.decode("utf-8", errors="ignore")
+                        return json.dumps(
+                            {"status": "ok", "path": path, "content": text},
+                            ensure_ascii=False,
+                        )
+                    out_lines: list[str] = []
+                    with open(path, "r", encoding="utf-8") as f:
+                        for _ in range(max(1, n_lines)):
+                            line = f.readline()
+                            if not line:
+                                break
+                            out_lines.append(line)
+                    return json.dumps(
+                        {"status": "ok", "path": path, "content": "".join(out_lines)},
+                        ensure_ascii=False,
+                    )
+                except Exception as e:
+                    return json.dumps(
+                        {"status": "error", "message": str(e), "path": path},
+                        ensure_ascii=False,
+                    )
+
+            if name == "files.tail":
+                path = _abs_path(arguments.get("path") or "")
+                ok, path = ensure_within_root(path)
+                if not ok:
+                    raise LLMError(
+                        "Path is outside of WORKSPACE_ROOT (set HACK_WORKSPACE_ENFORCE=0 to disable)"
+                    )
+                n = int(arguments.get("lines") or 20)
+                try:
+                    # naive approach for now: read all then tail (acceptable for moderate files)
+                    with open(path, "r", encoding="utf-8") as f:
+                        lines = f.readlines()
+                    tail = lines[-max(1, n) :]
+                    return json.dumps(
+                        {"status": "ok", "path": path, "content": "".join(tail)},
+                        ensure_ascii=False,
+                    )
+                except Exception as e:
+                    return json.dumps(
+                        {"status": "error", "message": str(e), "path": path},
+                        ensure_ascii=False,
+                    )
+
+            if name == "files.find_replace":
+                path = _abs_path(arguments.get("path") or "")
+                ok, path = ensure_within_root(path)
+                if not ok:
+                    raise LLMError(
+                        "Path is outside of WORKSPACE_ROOT (set HACK_WORKSPACE_ENFORCE=0 to disable)"
+                    )
+                query = str(arguments.get("query") or "")
+                replacement = str(arguments.get("replacement") or "")
+                use_regex = bool(arguments.get("regex", False))
+                case_sensitive = bool(arguments.get("case_sensitive", True))
+                max_repl = int(arguments.get("max_replacements") or 0)
+                apply = bool(arguments.get("apply", False))
+                if not query:
+                    raise LLMError("'query' is required")
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        text = f.read()
+                except Exception as e:
+                    return json.dumps(
+                        {"status": "error", "message": str(e), "path": path},
+                        ensure_ascii=False,
+                    )
+                flags = 0 if case_sensitive else __import__("re").IGNORECASE
+                count = 0
+                try:
+                    if use_regex:
+                        pattern = __import__("re").compile(query, flags)
+                        if max_repl > 0:
+                            new_text, count = pattern.subn(
+                                replacement, text, count=max_repl
+                            )
+                        else:
+                            new_text, count = pattern.subn(replacement, text)
+                    else:
+                        src = text if case_sensitive else text.lower()
+                        needle = query if case_sensitive else query.lower()
+                        if max_repl <= 0:
+                            new_text = (
+                                text.replace(query, replacement)
+                                if case_sensitive
+                                else src.replace(needle, replacement)
+                            )
+                            # compute count
+                            count = src.count(needle)
+                        else:
+                            new_parts = []
+                            i = 0
+                            replaced = 0
+                            while i < len(text):
+                                j = (
+                                    (src.find(needle, i))
+                                    if not case_sensitive
+                                    else (text.find(query, i))
+                                )
+                                if j == -1 or (max_repl and replaced >= max_repl):
+                                    new_parts.append(text[i:])
+                                    break
+                                new_parts.append(text[i:j])
+                                new_parts.append(replacement)
+                                i = j + len(query)
+                                replaced += 1
+                            new_text = "".join(new_parts)
+                            count = replaced
+                except Exception as e:
+                    return json.dumps(
+                        {
+                            "status": "error",
+                            "message": f"find_replace failed: {e}",
+                            "path": path,
+                        },
+                        ensure_ascii=False,
+                    )
+                if not apply:
+                    diff = "\n".join(
+                        difflib.unified_diff(
+                            text.splitlines(),
+                            new_text.splitlines(),
+                            fromfile=path,
+                            tofile=path,
+                            lineterm="",
+                        )
+                    )
+                    return json.dumps(
+                        {
+                            "status": "preview",
+                            "path": path,
+                            "replacements": count,
+                            "diff": diff,
+                        },
+                        ensure_ascii=False,
+                    )
+                try:
+                    with open(path, "w", encoding="utf-8") as f:
+                        f.write(new_text)
+                    st = os.stat(path)
+                    return json.dumps(
+                        {
+                            "status": "ok",
+                            "path": path,
+                            "replacements": count,
+                            "size": int(st.st_size),
+                        },
+                        ensure_ascii=False,
+                    )
+                except Exception as e:
+                    return json.dumps(
+                        {"status": "error", "message": str(e), "path": path},
+                        ensure_ascii=False,
+                    )
+
+            if name == "files.apply_patch":
+                import subprocess
+
+                path = _abs_path(arguments.get("path") or "")
+                ok, path = ensure_within_root(path)
+                if not ok:
+                    raise LLMError(
+                        "Path is outside of WORKSPACE_ROOT (set HACK_WORKSPACE_ENFORCE=0 to disable)"
+                    )
+                patch_text = str(arguments.get("patch") or "")
+                dry_run = bool(arguments.get("dry_run", False))
+                if not shutil.which("patch"):
+                    return json.dumps(
+                        {"status": "error", "message": "'patch' tool not available"},
+                        ensure_ascii=False,
+                    )
+                # Write temp patch
+                import tempfile
+
+                with tempfile.NamedTemporaryFile(
+                    "w", delete=False, encoding="utf-8"
+                ) as tf:
+                    tf.write(patch_text)
+                    tf_path = tf.name
+                cmd = ["patch", "--silent", "--backup", "-p0", "--input", tf_path]
+                cwd = os.path.dirname(path) or os.getcwd()
+                try:
+                    # dry-run via --dry-run if supported; fallback to not writing by restoring backup
+                    run_cmd = cmd + (["--dry-run"] if dry_run else [])
+                    res = subprocess.run(
+                        run_cmd,
+                        cwd=cwd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                    )
+                    if res.returncode != 0:
+                        return json.dumps(
+                            {"status": "error", "message": res.stderr or res.stdout},
+                            ensure_ascii=False,
+                        )
+                    if dry_run:
+                        return json.dumps(
+                            {
+                                "status": "ok",
+                                "dry_run": True,
+                                "output": res.stdout.strip(),
+                            },
+                            ensure_ascii=False,
+                        )
+                    return json.dumps(
+                        {
+                            "status": "ok",
+                            "dry_run": False,
+                            "output": res.stdout.strip(),
+                        },
+                        ensure_ascii=False,
+                    )
+                finally:
+                    try:
+                        os.remove(tf_path)
+                    except Exception:
+                        pass
+
+            if name == "files.detect_encoding":
+                path = _abs_path(arguments.get("path") or "")
+                ok, path = ensure_within_root(path)
+                if not ok:
+                    raise LLMError(
+                        "Path is outside of WORKSPACE_ROOT (set HACK_WORKSPACE_ENFORCE=0 to disable)"
+                    )
+                encodings = [
+                    "utf-8",
+                    "utf-16",
+                    "utf-16-le",
+                    "utf-16-be",
+                    "utf-32",
+                    "latin-1",
+                ]
+                try:
+                    raw = open(path, "rb").read(200000)
+                except Exception as e:
+                    return json.dumps(
+                        {"status": "error", "message": str(e)}, ensure_ascii=False
+                    )
+                for enc in encodings:
+                    try:
+                        _ = raw.decode(enc)
+                        return json.dumps(
+                            {"status": "ok", "path": path, "encoding": enc},
+                            ensure_ascii=False,
+                        )
+                    except Exception:
+                        continue
+                return json.dumps(
+                    {"status": "unknown", "path": path, "encoding": None},
+                    ensure_ascii=False,
+                )
+
+            if name == "files.json_patch":
+                path = _abs_path(arguments.get("path") or "")
+                ok, path = ensure_within_root(path)
+                if not ok:
+                    raise LLMError(
+                        "Path is outside of WORKSPACE_ROOT (set HACK_WORKSPACE_ENFORCE=0 to disable)"
+                    )
+                patch_str = str(arguments.get("patch") or "[]")
+                try:
+                    patch_obj = json.loads(patch_str)
+                except Exception as e:
+                    return json.dumps(
+                        {"status": "error", "message": f"Invalid patch JSON: {e}"},
+                        ensure_ascii=False,
+                    )
+                try:
+                    import importlib
+                    try:
+                        jsonpatch = importlib.import_module("jsonpatch")
+                    except Exception:
+                        return json.dumps({"status": "error", "message": "jsonpatch module not available"}, ensure_ascii=False)
+                    with open(path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    patched = jsonpatch.apply_patch(data, patch_obj, in_place=False)
+                    with open(path, "w", encoding="utf-8") as f:
+                        json.dump(patched, f, ensure_ascii=False, indent=2)
+                    return json.dumps(
+                        {"status": "ok", "path": path}, ensure_ascii=False
+                    )
+                except Exception as e:
+                    return json.dumps(
+                        {"status": "error", "message": str(e)}, ensure_ascii=False
+                    )
+
+            if name == "files.yaml_update":
+                import re as _re
+
+                import yaml
+
+                path = _abs_path(arguments.get("path") or "")
+                ok, path = ensure_within_root(path)
+                if not ok:
+                    raise LLMError(
+                        "Path is outside of WORKSPACE_ROOT (set HACK_WORKSPACE_ENFORCE=0 to disable)"
+                    )
+                key_path = str(arguments.get("key_path") or "")
+                value_str = str(arguments.get("value") or "null")
+                try:
+                    value = json.loads(value_str)
+                except Exception:
+                    value = value_str
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        data = yaml.safe_load(f) or {}
+
+                    def set_path(obj, path_expr, val):
+                        parts = _re.findall(r"[^.\[\]]+|\[\d+\]", path_expr)
+                        cur = obj
+                        for i, part in enumerate(parts):
+                            if _re.fullmatch(r"\[\d+\]", part):
+                                idx = int(part[1:-1])
+                                if not isinstance(cur, list):
+                                    raise LLMError("List index on non-list in key_path")
+                                if i == len(parts) - 1:
+                                    if idx < len(cur):
+                                        cur[idx] = val
+                                    elif idx == len(cur):
+                                        cur.append(val)
+                                    else:
+                                        raise LLMError(
+                                            "List index out of range in key_path"
+                                        )
+                                else:
+                                    while idx >= len(cur):
+                                        cur.append({})
+                                    cur = cur[idx]
+                            else:
+                                key = part
+                                if i == len(parts) - 1:
+                                    if not isinstance(cur, dict):
+                                        raise LLMError("Key on non-dict in key_path")
+                                    cur[key] = val
+                                else:
+                                    if not isinstance(cur, dict):
+                                        raise LLMError("Key on non-dict in key_path")
+                                    if key not in cur or cur[key] is None:
+                                        cur[key] = {}
+                                    cur = cur[key]
+                        return obj
+
+                    new_data = set_path(data, key_path, value)
+                    with open(path, "w", encoding="utf-8") as f:
+                        yaml.safe_dump(new_data, f, sort_keys=False, allow_unicode=True)
+                    return json.dumps(
+                        {"status": "ok", "path": path}, ensure_ascii=False
+                    )
+                except Exception as e:
+                    return json.dumps(
+                        {"status": "error", "message": str(e)}, ensure_ascii=False
+                    )
+
+            if name == "files.snapshot_create":
+                directory = _abs_dir(arguments.get("directory") or "")
+                ok, directory = ensure_within_root(directory)
+                if not ok:
+                    raise LLMError(
+                        "Path is outside of WORKSPACE_ROOT (set HACK_WORKSPACE_ENFORCE=0 to disable)"
+                    )
+                inc = str(arguments.get("include_glob") or "").strip()
+                exc = str(arguments.get("exclude_glob") or "").strip()
+                want_hash = bool(arguments.get("hash", False))
+                max_files = int(arguments.get("max_files") or 10000)
+                max_size = int(arguments.get("max_file_size_bytes") or 5_000_000)
+                import hashlib
+
+                entries: list[dict[str, Any]] = []
+                count = 0
+                for root, _, files in os.walk(directory):
+                    for fname in files:
+                        path = os.path.join(root, fname)
+                        rel = os.path.relpath(path, directory)
+                        if inc and not __import__("fnmatch").fnmatch(rel, inc):
+                            continue
+                        if exc and __import__("fnmatch").fnmatch(rel, exc):
+                            continue
+                        try:
+                            st = os.stat(path)
+                            entry = {
+                                "path": rel,
+                                "size": int(st.st_size),
+                                "mtime": int(st.st_mtime),
+                            }
+                            if want_hash and st.st_size <= max_size:
+                                with open(path, "rb") as f:
+                                    entry["sha1"] = hashlib.sha1(f.read()).hexdigest()
+                            entries.append(entry)
+                            count += 1
+                            if count >= max_files:
+                                break
+                        except Exception:
+                            continue
+                    if count >= max_files:
+                        break
+                return json.dumps(
+                    {
+                        "status": "ok",
+                        "base": directory,
+                        "entries": entries,
+                        "count": len(entries),
+                    },
+                    ensure_ascii=False,
+                )
+
+            if name == "files.snapshot_diff":
+                try:
+                    a = json.loads(str(arguments.get("a") or "{}"))
+                    b = json.loads(str(arguments.get("b") or "{}"))
+                    ea = {e["path"]: e for e in a.get("entries", [])}
+                    eb = {e["path"]: e for e in b.get("entries", [])}
+                    added = [p for p in eb.keys() if p not in ea]
+                    removed = [p for p in ea.keys() if p not in eb]
+                    changed = []
+                    for p in set(ea.keys()).intersection(eb.keys()):
+                        if (
+                            ea[p].get("size") != eb[p].get("size")
+                            or ea[p].get("mtime") != eb[p].get("mtime")
+                            or (
+                                "sha1" in ea[p]
+                                and "sha1" in eb[p]
+                                and ea[p]["sha1"] != eb[p]["sha1"]
+                            )
+                        ):
+                            changed.append(p)
+                    return json.dumps(
+                        {
+                            "status": "ok",
+                            "added": added,
+                            "removed": removed,
+                            "changed": changed,
+                        },
+                        ensure_ascii=False,
+                    )
+                except Exception as e:
+                    return json.dumps(
+                        {"status": "error", "message": str(e)}, ensure_ascii=False
+                    )
             if name == "files.write":
                 path = _abs_path(arguments.get("path") or "")
                 ok, path = ensure_within_root(path)
