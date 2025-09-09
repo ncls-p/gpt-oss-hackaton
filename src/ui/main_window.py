@@ -635,15 +635,18 @@ class MainWindow(QMainWindow):
           max-width: 78%;
           padding: 10px 12px;
           border-radius: 14px;
-          word-wrap: break-word;
+          /* Robust wrapping even when there are long tokens or NBSP */
           white-space: pre-wrap;
+          word-wrap: break-word;           /* legacy */
+          overflow-wrap: anywhere;         /* modern */
+          word-break: break-word;          /* best-effort for Qt rich text */
         }}
-        .bubble ul, .bubble ol {{ white-space: normal; margin: 8px 0 8px 24px; }}
+        .bubble ul, .bubble ol {{ white-space: normal; margin: 8px 0 8px 24px; overflow-wrap: anywhere; word-break: break-word; }}
         .assistant {{ background: {bg_assist}; color: {text_assist}; border: 1px solid {border_assist}; }}
         .user {{ background: {bg_user}; color: {text_user}; border: 0; }}
         .label {{ font-size: 10pt; opacity: 0.75; margin-bottom: 4px; color: {time_col}; }}
         a {{ color: inherit; text-decoration: underline; }}
-        code {{ background: {pre_bg}; padding: 2px 4px; border-radius: 6px; border: 1px solid {pre_border}; }}
+        code {{ background: {pre_bg}; padding: 2px 4px; border-radius: 6px; border: 1px solid {pre_border}; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }}
         pre {{ background: {pre_bg}; padding: 10px; border-radius: 10px; overflow-x: auto; border: 1px solid {pre_border}; }}
         """
 
@@ -662,6 +665,11 @@ class MainWindow(QMainWindow):
         def _markdown_to_html(text: str) -> str:
             # Lightweight, safe-ish Markdown: code blocks, inline code, links, bold/italic, simple lists
             s = text or ""
+            # Convert non-breaking spaces to regular spaces so wrapping works
+            try:
+                s = s.replace("\u00A0", " ")
+            except Exception:
+                pass
             # Normalize newlines
             s = s.replace("\r\n", "\n").replace("\r", "\n")
             import re

@@ -14,6 +14,7 @@ from rich import box
 # Rich for modern, colorful CLI and Markdown rendering
 from rich.console import Console
 from rich.markdown import Markdown
+from rich.text import Text
 from rich.padding import Padding
 from rich.panel import Panel
 from rich.syntax import Syntax
@@ -132,7 +133,7 @@ def _shorten(obj: Any, width: Optional[int] = None) -> str:
 
 
 def _render_markdown_or_json(
-    console: Console, title: str, text: str, st: _Style
+    console: Console, title: str, text: str, st: _Style, *, plain: bool = False
 ) -> None:
     """Render assistant text. If JSON, pretty-print; else render as Markdown."""
     to_render = text
@@ -152,14 +153,164 @@ def _render_markdown_or_json(
             return
     except Exception:
         pass
-    # Wrap Markdown in Padding so Rich measures lines correctly inside Panel,
-    # otherwise long paragraphs may render as a single cropped line.
+    # Normalize non-breaking spaces to allow wrapping
+    to_render = to_render.replace("\u00a0", " ").replace("\u202f", " ")
+
+    # Hard-wrap very long paragraphs as a safety net when terminals mis-handle
+    # soft wrapping (esp. with wide glyphs/emoji). Avoid wrapping fenced code.
+    try:
+        import re
+        import shutil
+        import textwrap
+
+        term_w = shutil.get_terminal_size((120, 20)).columns
+        # Panel borders + padding + style margins can consume ~10 cols
+        wrap_w = max(40, min(term_w - 12, 200))
+
+        import unicodedata as _ud
+        try:
+            from wcwidth import wcwidth as _wcw  # more accurate terminal cell width
+        except Exception:  # pragma: no cover - optional dep
+            _wcw = None
+
+        def _cell_w(ch: str) -> int:
+            if _wcw is not None:
+                w = _wcw(ch)
+                return 0 if w < 0 else w
+            # Combining marks have zero width
+            if _ud.combining(ch):
+                return 0
+            # Treat East Asian wide/fullwidth as 2
+            if _ud.east_asian_width(ch) in ("W", "F"):
+                return 2
+            # Most emojis are wide; naive heuristic
+            if ord(ch) >= 0x1F300:
+                return 2
+            # Variation selectors & zero-width joiners
+            if ch in ("\u200d", "\ufe0f"):
+                return 0
+            return 1
+
+        def _visible_width(s: str) -> int:
+            return sum(_cell_w(c) for c in s)
+
+        def _wrap_cells(line: str, width: int) -> list[str]:
+            if not line:
+                return [""]
+            import re as _re
+
+            parts = _re.split(r"(\s+)", line)
+            out: list[str] = []
+            cur = ""
+            curw = 0
+            for p in parts:
+                if not p:
+                    continue
+                pw = _visible_width(p)
+                if p.isspace():
+                    # only add space if there's already content
+                    if curw + pw <= width:
+                        cur += p
+                        curw += pw
+                    else:
+                        out.append(cur.rstrip())
+                        cur, curw = "", 0
+                    continue
+                if curw + pw <= width:
+                    cur += p
+                    curw += pw
+                    continue
+                # need to break p itself
+                chunk = ""
+                chunkw = 0
+                for ch in p:
+                    w = _cell_w(ch)
+                    if chunkw + w > width:
+                        # flush current line
+                        if cur:
+                            out.append(cur.rstrip())
+                            cur, curw = "", 0
+                        out.append(chunk)
+                        chunk, chunkw = "", 0
+                    chunk += ch
+                    chunkw += w
+                if cur:
+                    out.append(cur.rstrip())
+                    cur, curw = "", 0
+                cur = chunk
+                curw = chunkw
+            if cur:
+                out.append(cur.rstrip())
+            return out or [""]
+
+        def _hard_wrap_noncode(md: str) -> str:
+            parts = re.split(r"(```[\s\S]*?```)", md)
+            out: list[str] = []
+            for chunk in parts:
+                if chunk.startswith("```"):
+                    out.append(chunk)
+                    continue
+                # Split by paragraphs to preserve blank lines
+                segs = re.split(r"(\n\s*\n)", chunk)
+                for seg in segs:
+                    if seg.startswith("\n") or not seg.strip():
+                        out.append(seg)
+                        continue
+                    # Wrap each line using terminal cell width
+                    new_lines: list[str] = []
+                    for line in seg.splitlines():
+                        if re.match(r"^\s*([-*]|\d+[.)])\s+", line):
+                            # keep list markers at start but still wrap by cells
+                            new_lines.extend(_wrap_cells(line, wrap_w))
+                        else:
+                            new_lines.extend(_wrap_cells(line, wrap_w))
+                    out.append("\n".join(new_lines))
+            return "".join(out)
+
+        to_render = _hard_wrap_noncode(to_render)
+    except Exception:
+        pass
+    if plain:
+        # Plain text rendering avoids any panel/markdown layout issues in rare terminals
+        console.print(to_render)
+        return
+
+    # Prefer robust Text wrapping unless we detect Markdown structures
+    md_like = any(
+        s in to_render
+        for s in (
+            "```",
+            "\n- ",
+            "\n* ",
+            "\n1. ",
+            "\n#",
+            "[",
+            "](",
+            "http://",
+            "https://",
+        )
+    )
+    if not md_like:
+        txt = Text(to_render, no_wrap=False, overflow="fold")
+        console.print(
+            Panel(
+                Padding(txt, (0, 1)),
+                title=title,
+                border_style="magenta",
+                box=box.ROUNDED,
+                expand=True,
+            )
+        )
+        return
+
+    # Fallback to Markdown rendering for content that likely uses MD features
     console.print(
         Panel(
             Padding(Markdown(to_render), (0, 1)),
             title=title,
             border_style="magenta",
             box=box.ROUNDED,
+            expand=True,  # ensure wrapping uses the full terminal width
         )
     )
 
@@ -197,6 +348,11 @@ def interactive_main(argv: Optional[list[str]] = None) -> int:
         "--cwd",
         default=None,
         help="Set working directory for files.* relative paths (default: current)",
+    )
+    parser.add_argument(
+        "--plain",
+        action="store_true",
+        help="Render assistant messages as plain text (no Markdown/Panel)",
     )
 
     args = parser.parse_args(argv)
@@ -474,7 +630,11 @@ def interactive_main(argv: Optional[list[str]] = None) -> int:
         # Render assistant text (Markdown aware)
         if last_text:
             _render_markdown_or_json(
-                console, f"{st.icon('assistant')} assistant", last_text, st
+                console,
+                f"{st.icon('assistant')} assistant",
+                last_text,
+                st,
+                plain=bool(args.plain),
             )
 
     return 0

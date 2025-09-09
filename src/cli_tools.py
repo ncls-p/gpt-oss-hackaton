@@ -50,6 +50,11 @@ def main(argv: list[str] | None = None) -> int:
         default="default",
         help="Preset system guidance (code uses files.* etc.)",
     )
+    parser.add_argument(
+        "--plain",
+        action="store_true",
+        help="When used with --pretty, render plain text (no Markdown/Panel)",
+    )
 
     args = parser.parse_args(argv)
 
@@ -83,8 +88,11 @@ def main(argv: list[str] | None = None) -> int:
             from rich.padding import Padding
             from rich.panel import Panel
             from rich.syntax import Syntax
+            from rich.text import Text
 
-            console = Console()
+            # Enable soft wrapping so long paragraphs (single line without newlines)
+            # wrap instead of being visually truncated.
+            console = Console(soft_wrap=True)
             text = result.get("text", "") or ""
             try:
                 obj = json.loads(text)
@@ -99,21 +107,145 @@ def main(argv: list[str] | None = None) -> int:
                             title="assistant",
                             box=box.ROUNDED,
                             border_style="magenta",
+                            expand=True,
                         )
                     )
                     text = ""
             except Exception:
                 pass
             if text:
-                # Wrap Markdown in Padding so long paragraphs wrap correctly inside Panel
-                console.print(
-                    Panel(
-                        Padding(Markdown(text), (0, 1)),
-                        title="assistant",
-                        box=box.ROUNDED,
-                        border_style="magenta",
+                # Normalize non-breaking spaces to allow wrapping
+                text = text.replace("\u00a0", " ").replace("\u202f", " ")
+                # Hard-wrap very long paragraphs as a safety net (avoid code blocks)
+                try:
+                    import re
+                    import shutil
+                    import unicodedata as _ud
+                    try:
+                        from wcwidth import wcwidth as _wcw
+                    except Exception:  # pragma: no cover
+                        _wcw = None
+
+                    def _cell_w(ch: str) -> int:
+                        if _wcw is not None:
+                            w = _wcw(ch)
+                            return 0 if w < 0 else w
+                        if _ud.combining(ch):
+                            return 0
+                        if _ud.east_asian_width(ch) in ("W", "F"):
+                            return 2
+                        if ord(ch) >= 0x1F300:
+                            return 2
+                        if ch in ("\u200d", "\ufe0f"):
+                            return 0
+                        return 1
+
+                    def _visible_width(s: str) -> int:
+                        return sum(_cell_w(c) for c in s)
+
+                    def _wrap_cells(line: str, width: int) -> list[str]:
+                        if not line:
+                            return [""]
+                        parts = re.split(r"(\s+)", line)
+                        out: list[str] = []
+                        cur = ""
+                        curw = 0
+                        for p in parts:
+                            if not p:
+                                continue
+                            pw = _visible_width(p)
+                            if p.isspace():
+                                if curw + pw <= width:
+                                    cur += p
+                                    curw += pw
+                                else:
+                                    out.append(cur.rstrip())
+                                    cur, curw = "", 0
+                                continue
+                            if curw + pw <= width:
+                                cur += p
+                                curw += pw
+                                continue
+                            # break token by cells
+                            chunk = ""
+                            chunkw = 0
+                            for ch in p:
+                                w = _cell_w(ch)
+                                if chunkw + w > width:
+                                    if cur:
+                                        out.append(cur.rstrip())
+                                        cur, curw = "", 0
+                                    out.append(chunk)
+                                    chunk, chunkw = "", 0
+                                chunk += ch
+                                chunkw += w
+                            if cur:
+                                out.append(cur.rstrip())
+                                cur, curw = "", 0
+                            cur = chunk
+                            curw = chunkw
+                        if cur:
+                            out.append(cur.rstrip())
+                        return out or [""]
+
+                    term_w = shutil.get_terminal_size((120, 20)).columns
+                    wrap_w = max(40, min(term_w - 12, 200))
+                    parts = re.split(r"(```[\s\S]*?```)", text)
+                    new_parts: list[str] = []
+                    for chunk in parts:
+                        if chunk.startswith("```"):
+                            new_parts.append(chunk)
+                            continue
+                        segs = re.split(r"(\n\s*\n)", chunk)
+                        for seg in segs:
+                            if seg.startswith("\n") or not seg.strip():
+                                new_parts.append(seg)
+                                continue
+                            lines: list[str] = []
+                            for line in seg.splitlines():
+                                lines.extend(_wrap_cells(line, wrap_w))
+                            new_parts.append("\n".join(lines))
+                    text = "".join(new_parts)
+                except Exception:
+                    pass
+                if args.plain:
+                    console.print(text)
+                else:
+                    md_like = any(
+                        s in text
+                        for s in (
+                            "```",
+                            "\n- ",
+                            "\n* ",
+                            "\n1. ",
+                            "\n#",
+                            "[",
+                            "](",
+                            "http://",
+                            "https://",
+                        )
                     )
-                )
+                    if not md_like:
+                        txt = Text(text, no_wrap=False, overflow="fold")
+                        console.print(
+                            Panel(
+                                Padding(txt, (0, 1)),
+                                title="assistant",
+                                box=box.ROUNDED,
+                                border_style="magenta",
+                                expand=True,
+                            )
+                        )
+                    else:
+                        console.print(
+                            Panel(
+                                Padding(Markdown(text), (0, 1)),
+                                title="assistant",
+                                box=box.ROUNDED,
+                                border_style="magenta",
+                                expand=True,
+                            )
+                        )
             # steps table
             if result.get("steps"):
                 console.print_json(data=result.get("steps"))
