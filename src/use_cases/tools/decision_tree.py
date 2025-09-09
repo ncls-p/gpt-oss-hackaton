@@ -8,6 +8,7 @@ Top-level tools:
 - domain.system: select the System tools domain
 - domain.project: select the Project tools domain
 - domain.git: select the Git tools domain
+- domain.web: select the Web scraping tools domain
 
 Once a domain is selected, available_tools returns only the tools of that domain
 until the user selects another domain. Calling a domain-prefixed tool directly
@@ -46,6 +47,7 @@ class DecisionTreeToolsHandler(ToolsHandlerPort):
             "application": "apps",
             "apps": "apps",
             "system": "system",
+            "web": "web",
         }
 
     def _domain_tools(self) -> list[ToolSpec]:
@@ -62,7 +64,7 @@ class DecisionTreeToolsHandler(ToolsHandlerPort):
         base: list[ToolSpec] = [
             {
                 "name": "domain.list",
-                "description": "List available domains (files, apps, system, project, git).",
+                "description": "List available domains (files, apps, system, project, git, web).",
                 "parameters": {
                     "type": "object",
                     "properties": {},
@@ -112,6 +114,15 @@ class DecisionTreeToolsHandler(ToolsHandlerPort):
             {
                 "name": "domain.git",
                 "description": "Select the 'git' domain to access Git (read-only) tools.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": True,
+                },
+            },
+            {
+                "name": "domain.web",
+                "description": "Select the 'web' domain to access web scraping tools.",
                 "parameters": {
                     "type": "object",
                     "properties": {},
@@ -185,6 +196,8 @@ class DecisionTreeToolsHandler(ToolsHandlerPort):
             return self._select("project")
         if name == "domain.git":
             return self._select("git")
+        if name == "domain.web":
+            return self._select("web")
 
         # Direct domain-prefixed tool use selects domain automatically
         inferred = self._maybe_infer_domain(name)

@@ -57,12 +57,13 @@ class _Style:
 
 CODER_PROFILE_SYSTEM = (
     "You are a coding agent with access to domain selection tools (domain.*) "
-    "and domain tools: files.*, project.*, git.*, system.*.\n"
+    "and domain tools: files.*, project.*, git.*, system.*, web.*.\n"
     "When the user asks to create or modify files, always: \n"
     "1) Select the 'files' domain (domain.files) if not already active.\n"
     "2) Use files.mkdir and files.write with absolute paths under the user's workspace.\n"
     "3) Do not print code snippets as plain text; write them to files.\n"
-    "4) When done, call assistant.final with a short summary."
+    "4) When done, call assistant.final with a short summary.\n"
+    "For web questions, select 'web' (domain.web) and use web.scrape with CSS selectors."
 )
 
 

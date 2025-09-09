@@ -297,7 +297,7 @@ class OpenAIToolsAdapter(OpenAIAdapter):
         ]
 
         rules = [
-            "First, select a domain with domain.* (files/apps/system/project/git).",
+            "First, select a domain with domain.* (files/apps/system/project/git/web).",
             "Then, use the corresponding tools (e.g., files.list).",
             "Do not call assistant.final until you have used at least one non-final tool.",
             "When calling tools, arguments must be strict JSON (no prose, no markdown).",
@@ -732,7 +732,22 @@ class OpenAIToolsAdapter(OpenAIAdapter):
                 if not getattr(msg, "tool_calls", None):
                     content: Optional[str] = msg.content
                     if not content:
-                        raise LLMError("Empty response from the model")
+                        # Some models emit invalid tool-call markup without raising API errors
+                        # resulting in an empty assistant message. Nudge the model with a
+                        # structured notice and try again within the step budget.
+                        try:
+                            messages.append(
+                                self._assistant_msg_with_error_and_tools(
+                                    LLMError(
+                                        "Empty assistant content. If you attempted a tool call, "
+                                        "please call one of the available tools with strict JSON arguments."
+                                    )
+                                )
+                            )
+                            # Retry next loop
+                            continue
+                        except Exception:
+                            raise LLMError("Empty response from the model")
                     if require_final_tool:
                         # Treat as intermediate, keep going to encourage finalize
                         messages.append(
@@ -1048,7 +1063,20 @@ class OpenAIToolsAdapter(OpenAIAdapter):
                 if not getattr(msg, "tool_calls", None):
                     content: Optional[str] = msg.content
                     if not content:
-                        raise LLMError("Empty response from the model")
+                        # Nudge-and-retry as above for chat turns
+                        try:
+                            history.append(
+                                self._assistant_msg_with_error_and_tools(
+                                    LLMError(
+                                        "Empty assistant content. If you attempted a tool call, "
+                                        "please call one of the available tools with strict JSON arguments."
+                                    )
+                                )
+                            )
+                            # Retry next loop
+                            continue
+                        except Exception:
+                            raise LLMError("Empty response from the model")
                     if require_final_tool:
                         history.append(
                             cast(

@@ -28,9 +28,10 @@ from src.use_cases.llm.generate_text import GenerateTextUseCase
 from src.use_cases.tools.application_tools import ApplicationToolsHandler  # nouveau
 from src.use_cases.tools.decision_tree import DecisionTreeToolsHandler
 from src.use_cases.tools.files_tools import FilesToolsHandler  # nouveau
-from src.use_cases.tools.system_tools import SystemToolsHandler
-from src.use_cases.tools.project_tools import ProjectToolsHandler
 from src.use_cases.tools.git_tools import GitToolsHandler
+from src.use_cases.tools.project_tools import ProjectToolsHandler
+from src.use_cases.tools.system_tools import SystemToolsHandler
+from src.use_cases.tools.web_tools import WebToolsHandler
 
 
 class CompositeToolsHandler(ToolsHandlerPort):
@@ -202,6 +203,7 @@ class DependencyContainer:
             system_tools = SystemToolsHandler(logger=self._logger)
             project_tools = ProjectToolsHandler(logger=self._logger)
             git_tools = GitToolsHandler(logger=self._logger)
+            web_tools = WebToolsHandler(logger=self._logger)
             decision = DecisionTreeToolsHandler(
                 {
                     "files": files_tools,
@@ -209,6 +211,7 @@ class DependencyContainer:
                     "system": system_tools,
                     "project": project_tools,
                     "git": git_tools,
+                    "web": web_tools,
                 },
                 logger=self._logger,
                 alias_prefixes={
@@ -218,6 +221,7 @@ class DependencyContainer:
                     "system": "system",
                     "project": "project",
                     "git": "git",
+                    "web": "web",
                 },
             )
             self._instances["llm_tools_adapter"] = OpenAIToolsAdapter(
