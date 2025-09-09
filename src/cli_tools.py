@@ -205,47 +205,47 @@ def main(argv: list[str] | None = None) -> int:
                             for line in seg.splitlines():
                                 lines.extend(_wrap_cells(line, wrap_w))
                             new_parts.append("\n".join(lines))
-                    text = "".join(new_parts)
+                    wrapped = "".join(new_parts)
+                    # Convert single newlines to Markdown hard-breaks so wrapping is preserved
+                    def _apply_hardbreaks(md_text: str) -> str:
+                        # Preserve code blocks untouched
+                        code_pat = re.compile(r"```([A-Za-z0-9_+-]+)?\n([\s\S]*?)\n```", re.DOTALL)
+                        out: list[str] = []
+                        last = 0
+                        for m in code_pat.finditer(md_text):
+                            before = md_text[last:m.start()]
+                            out.append(_hardbreaks_in_paragraphs(before))
+                            out.append(md_text[m.start():m.end()])
+                            last = m.end()
+                        out.append(_hardbreaks_in_paragraphs(md_text[last:]))
+                        return "".join(out)
+
+                    def _hardbreaks_in_paragraphs(chunk: str) -> str:
+                        paras = re.split(r"(\n\s*\n+)", chunk)
+                        out: list[str] = []
+                        for seg in paras:
+                            if re.match(r"\n\s*\n+", seg):
+                                out.append(seg)
+                            else:
+                                lines = seg.splitlines()
+                                out.append("  \n".join(lines) if lines else seg)
+                        return "".join(out)
+
+                    text = _apply_hardbreaks(wrapped)
                 except Exception:
                     pass
                 if args.plain:
                     console.print(text)
                 else:
-                    md_like = any(
-                        s in text
-                        for s in (
-                            "```",
-                            "\n- ",
-                            "\n* ",
-                            "\n1. ",
-                            "\n#",
-                            "[",
-                            "](",
-                            "http://",
-                            "https://",
+                    console.print(
+                        Panel(
+                            Padding(Markdown(text), (0, 1)),
+                            title="assistant",
+                            box=box.ROUNDED,
+                            border_style="magenta",
+                            expand=True,
                         )
                     )
-                    if not md_like:
-                        txt = Text(text, no_wrap=False, overflow="fold")
-                        console.print(
-                            Panel(
-                                Padding(txt, (0, 1)),
-                                title="assistant",
-                                box=box.ROUNDED,
-                                border_style="magenta",
-                                expand=True,
-                            )
-                        )
-                    else:
-                        console.print(
-                            Panel(
-                                Padding(Markdown(text), (0, 1)),
-                                title="assistant",
-                                box=box.ROUNDED,
-                                border_style="magenta",
-                                expand=True,
-                            )
-                        )
             # steps table
             if result.get("steps"):
                 console.print_json(data=result.get("steps"))

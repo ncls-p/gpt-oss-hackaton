@@ -268,6 +268,53 @@ def _render_markdown_or_json(
             return "".join(out)
 
         to_render = _hard_wrap_noncode(to_render)
+
+        # Convert single newlines to Markdown hard-breaks (two spaces + \n)
+        # so that Rich's Markdown renderer does not reflow our wrapped lines.
+        try:
+            import re as _re
+
+            code_pat2 = _re.compile(r"```([A-Za-z0-9_+-]+)?\n([\s\S]*?)\n```", _re.DOTALL)
+
+            def _apply_hardbreaks(md_text: str) -> str:
+                parts = code_pat2.split(md_text)
+                out: list[str] = []
+                i = 0
+                while i < len(parts):
+                    if i + 2 < len(parts) and parts[i] == "":
+                        # Matched split yields: [before, lang, code, after, lang, code, after, ...]
+                        # but our regex with split is tricky; fallback to a safer approach below.
+                        break
+                    i += 1
+                # Safer approach: iterate over code blocks via finditer and rebuild
+                out = []
+                last = 0
+                for m in code_pat2.finditer(md_text):
+                    before = md_text[last:m.start()]
+                    out.append(_hardbreaks_in_paragraphs(before))
+                    out.append(md_text[m.start():m.end()])
+                    last = m.end()
+                out.append(_hardbreaks_in_paragraphs(md_text[last:]))
+                return "".join(out)
+
+            def _hardbreaks_in_paragraphs(chunk: str) -> str:
+                # Split on blank-line boundaries and join lines inside a paragraph with '  \n'
+                paras = _re.split(r"(\n\s*\n+)", chunk)
+                out: list[str] = []
+                for seg in paras:
+                    if _re.match(r"\n\s*\n+", seg):
+                        out.append(seg)
+                    else:
+                        lines = seg.splitlines()
+                        if not lines:
+                            out.append(seg)
+                        else:
+                            out.append("  \n".join(lines))
+                return "".join(out)
+
+            to_render = _apply_hardbreaks(to_render)
+        except Exception:
+            pass
     except Exception:
         pass
     if plain:
@@ -275,35 +322,7 @@ def _render_markdown_or_json(
         console.print(to_render)
         return
 
-    # Prefer robust Text wrapping unless we detect Markdown structures
-    md_like = any(
-        s in to_render
-        for s in (
-            "```",
-            "\n- ",
-            "\n* ",
-            "\n1. ",
-            "\n#",
-            "[",
-            "](",
-            "http://",
-            "https://",
-        )
-    )
-    if not md_like:
-        txt = Text(to_render, no_wrap=False, overflow="fold")
-        console.print(
-            Panel(
-                Padding(txt, (0, 1)),
-                title=title,
-                border_style="magenta",
-                box=box.ROUNDED,
-                expand=True,
-            )
-        )
-        return
-
-    # Fallback to Markdown rendering for content that likely uses MD features
+    # Render as Markdown so inline styles (e.g., **bold**) are visible.
     console.print(
         Panel(
             Padding(Markdown(to_render), (0, 1)),
