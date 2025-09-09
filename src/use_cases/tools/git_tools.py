@@ -67,6 +67,75 @@ class GitToolsHandler(ToolsHandlerPort):
                     "additionalProperties": False,
                 },
             },
+            {
+                "name": "git.log",
+                "description": "Show recent commits (short).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "directory": {"type": "string"},
+                        "max_count": {"type": "integer", "description": "Default 20"},
+                    },
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "git.show",
+                "description": "Show a commit or a file at a commit (max_bytes).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "directory": {"type": "string"},
+                        "spec": {
+                            "type": "string",
+                            "description": "Commit or object spec",
+                        },
+                        "path": {"type": "string", "description": "Optional path"},
+                        "max_bytes": {
+                            "type": "integer",
+                            "description": "Cap bytes (default 20000)",
+                        },
+                    },
+                    "required": ["spec"],
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "git.blame",
+                "description": "Blame a file (optionally range).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "directory": {"type": "string"},
+                        "path": {"type": "string"},
+                        "range": {"type": "string", "description": "like :10,20"},
+                        "max_bytes": {
+                            "type": "integer",
+                            "description": "Cap bytes (default 20000)",
+                        },
+                    },
+                    "required": ["path"],
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "git.branch_list",
+                "description": "List branches (short).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"directory": {"type": "string"}},
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "git.current_branch",
+                "description": "Show current branch.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"directory": {"type": "string"}},
+                    "additionalProperties": False,
+                },
+            },
         ]
 
     def dispatch(self, name: str, arguments: dict[str, Any]) -> Any:
@@ -75,6 +144,16 @@ class GitToolsHandler(ToolsHandlerPort):
                 return self._git_status(arguments)
             if name == "git.diff":
                 return self._git_diff(arguments)
+            if name == "git.log":
+                return self._git_log(arguments)
+            if name == "git.show":
+                return self._git_show(arguments)
+            if name == "git.blame":
+                return self._git_blame(arguments)
+            if name == "git.branch_list":
+                return self._git_branch_list(arguments)
+            if name == "git.current_branch":
+                return self._git_current_branch(arguments)
             raise ValueError(f"Unknown tool: {name}")
         except ValueError:
             raise
@@ -169,3 +248,122 @@ class GitToolsHandler(ToolsHandlerPort):
     def _require_git_available(self) -> None:
         if not shutil.which("git"):
             raise LLMError("git executable not found in PATH")
+
+    def _git_log(self, args: dict[str, Any]) -> str:
+        directory = str(args.get("directory") or os.getcwd())
+        max_count = int(args.get("max_count") or 20)
+        self._require_git_available()
+        result = subprocess.run(
+            [
+                "git",
+                "-C",
+                directory,
+                "log",
+                f"-n{max_count}",
+                "--pretty=%h %ad %s",
+                "--date=short",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode != 0:
+            return json.dumps(
+                {"status": "error", "message": result.stderr.strip()},
+                ensure_ascii=False,
+            )
+        return json.dumps({"status": "ok", "log": result.stdout}, ensure_ascii=False)
+
+    def _git_show(self, args: dict[str, Any]) -> str:
+        directory = str(args.get("directory") or os.getcwd())
+        spec = str(args.get("spec") or "").strip()
+        path = str(args.get("path") or "").strip()
+        max_bytes = int(args.get("max_bytes") or 20_000)
+        if not spec:
+            raise LLMError("Field 'spec' is required")
+        self._require_git_available()
+        cmd = ["git", "-C", directory, "show", spec]
+        if path:
+            cmd.extend(["--", path])
+        result = subprocess.run(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=8
+        )
+        if result.returncode != 0:
+            return json.dumps(
+                {"status": "error", "message": result.stderr.strip()},
+                ensure_ascii=False,
+            )
+        out = result.stdout
+        truncated = False
+        if len(out.encode("utf-8")) > max_bytes:
+            out = out.encode("utf-8")[:max_bytes].decode("utf-8", errors="ignore")
+            truncated = True
+        return json.dumps(
+            {"status": "ok", "show": out, "truncated": truncated}, ensure_ascii=False
+        )
+
+    def _git_blame(self, args: dict[str, Any]) -> str:
+        directory = str(args.get("directory") or os.getcwd())
+        path = str(args.get("path") or "").strip()
+        rng = str(args.get("range") or "").strip()
+        max_bytes = int(args.get("max_bytes") or 20_000)
+        if not path:
+            raise LLMError("Field 'path' is required")
+        self._require_git_available()
+        cmd = ["git", "-C", directory, "blame", "--", path]
+        if rng:
+            cmd.insert(4, f"-L{rng}")
+        result = subprocess.run(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=8
+        )
+        if result.returncode != 0:
+            return json.dumps(
+                {"status": "error", "message": result.stderr.strip()},
+                ensure_ascii=False,
+            )
+        out = result.stdout
+        truncated = False
+        if len(out.encode("utf-8")) > max_bytes:
+            out = out.encode("utf-8")[:max_bytes].decode("utf-8", errors="ignore")
+            truncated = True
+        return json.dumps(
+            {"status": "ok", "blame": out, "truncated": truncated}, ensure_ascii=False
+        )
+
+    def _git_branch_list(self, args: dict[str, Any]) -> str:
+        directory = str(args.get("directory") or os.getcwd())
+        self._require_git_available()
+        result = subprocess.run(
+            ["git", "-C", directory, "branch", "--format=%(refname:short)"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode != 0:
+            return json.dumps(
+                {"status": "error", "message": result.stderr.strip()},
+                ensure_ascii=False,
+            )
+        branches = [b for b in result.stdout.splitlines() if b.strip()]
+        return json.dumps({"status": "ok", "branches": branches}, ensure_ascii=False)
+
+    def _git_current_branch(self, args: dict[str, Any]) -> str:
+        directory = str(args.get("directory") or os.getcwd())
+        self._require_git_available()
+        result = subprocess.run(
+            ["git", "-C", directory, "rev-parse", "--abbrev-ref", "HEAD"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode != 0:
+            return json.dumps(
+                {"status": "error", "message": result.stderr.strip()},
+                ensure_ascii=False,
+            )
+        return json.dumps(
+            {"status": "ok", "branch": result.stdout.strip()}, ensure_ascii=False
+        )

@@ -279,6 +279,9 @@ def interactive_main(argv: Optional[list[str]] = None) -> int:
                 tbl.add_row("/status", "Show current settings")
                 tbl.add_row("/color <on|off>", "Toggle colors")
                 tbl.add_row("/icons <on|off>", "Toggle icons")
+                tbl.add_row("/workspace <on|off>", "Toggle WORKSPACE_ROOT enforcement")
+                tbl.add_row("/workspace-root <path>", "Set WORKSPACE_ROOT env path")
+                tbl.add_row("/load <file.json>", "Load saved conversation")
                 tbl.add_row("/cls", "Clear the screen")
                 tbl.add_row("/save <file.json>", "Save conversation and steps")
                 tbl.add_row("/clear", "Clear conversation")
@@ -331,7 +334,34 @@ def interactive_main(argv: Optional[list[str]] = None) -> int:
                 stbl.add_row("final_required", str(args.final_required))
                 stbl.add_row("colors", str(color_on))
                 stbl.add_row("icons", str(icons_on))
+                stbl.add_row("HACK_WORKSPACE_ROOT", os.getenv("HACK_WORKSPACE_ROOT", ""))
+                stbl.add_row("HACK_WORKSPACE_ENFORCE", os.getenv("HACK_WORKSPACE_ENFORCE", "1"))
                 console.print(stbl)
+                continue
+            if cmd == "workspace" and sargs:
+                v = sargs[0].lower()
+                enabled = v in ("on", "true", "1", "yes")
+                os.environ["HACK_WORKSPACE_ENFORCE"] = "1" if enabled else "0"
+                console.print(
+                    f"[green]WORKSPACE enforcement[/green] = {'on' if enabled else 'off'}"
+                )
+                continue
+            if cmd == "workspace-root" and sargs:
+                root = os.path.abspath(os.path.expanduser(" ".join(sargs)))
+                os.environ["HACK_WORKSPACE_ROOT"] = root
+                console.print(f"[green]WORKSPACE_ROOT[/green] = {root}")
+                continue
+            if cmd == "load" and sargs:
+                path = sargs[0]
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    messages = list(data.get("conversation", []))
+                    last_text = str(data.get("last_text", ""))
+                    last_steps = list(data.get("last_steps", []))
+                    console.print(f"[green]Loaded[/green] {path}")
+                except Exception as e:
+                    console.print(f"[red]Load failed:[/red] {e}")
                 continue
             if cmd == "cwd":
                 if not sargs:

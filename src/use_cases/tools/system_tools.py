@@ -75,6 +75,47 @@ class SystemToolsHandler(ToolsHandlerPort):
                     "additionalProperties": False,
                 },
             },
+            {
+                "name": "system.clipboard_set",
+                "description": "Set text into the system clipboard.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"text": {"type": "string"}},
+                    "required": ["text"],
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "system.clipboard_get",
+                "description": "Get text from the system clipboard.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "system.notify",
+                "description": "Show a system notification with a title and message.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string"},
+                        "message": {"type": "string"},
+                    },
+                    "required": ["title", "message"],
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "system.open_terminal",
+                "description": "Open a terminal window at the given directory (best-effort).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"directory": {"type": "string"}},
+                    "additionalProperties": False,
+                },
+            },
         ]
 
     def dispatch(self, name: str, arguments: dict[str, Any]) -> Any:
@@ -165,6 +206,165 @@ class SystemToolsHandler(ToolsHandlerPort):
                 return json.dumps(
                     {"status": "ok" if ok else "failed", "path": p},
                     ensure_ascii=False,
+                )
+
+            if name == "system.clipboard_set":
+                text = str(arguments.get("text") or "")
+                ok = False
+                try:
+                    import sys as _sys
+                    import shutil as _shutil
+
+                    if _sys.platform.startswith("darwin"):
+                        import subprocess as sp
+
+                        p = sp.run(["pbcopy"], input=text.encode("utf-8"))
+                        ok = p.returncode == 0
+                    elif _sys.platform.startswith("win"):
+                        import subprocess as sp
+
+                        p = sp.run(["clip"], input=text.encode("utf-16le"))
+                        ok = p.returncode == 0
+                    else:
+                        import subprocess as sp
+
+                        if _shutil.which("xclip"):
+                            p = sp.run(
+                                ["xclip", "-selection", "clipboard"],
+                                input=text.encode("utf-8"),
+                            )
+                            ok = p.returncode == 0
+                        elif _shutil.which("xsel"):
+                            p = sp.run(
+                                ["xsel", "--clipboard"], input=text.encode("utf-8")
+                            )
+                            ok = p.returncode == 0
+                except Exception:
+                    ok = False
+                return json.dumps(
+                    {"status": "ok" if ok else "failed"}, ensure_ascii=False
+                )
+
+            if name == "system.clipboard_get":
+                content = None
+                try:
+                    import subprocess as sp
+                    import sys as _sys
+                    import shutil as _shutil
+
+                    if _sys.platform.startswith("darwin"):
+                        p = sp.run(["pbpaste"], stdout=sp.PIPE)
+                        if p.returncode == 0:
+                            content = p.stdout.decode("utf-8", errors="ignore")
+                    elif _sys.platform.startswith("win"):
+                        # PowerShell clipboard
+                        p = sp.run(
+                            ["powershell", "-NoProfile", "Get-Clipboard"],
+                            stdout=sp.PIPE,
+                        )
+                        if p.returncode == 0:
+                            content = p.stdout.decode("utf-8", errors="ignore")
+                    else:
+                        if _shutil.which("xclip"):
+                            p = sp.run(
+                                ["xclip", "-selection", "clipboard", "-o"],
+                                stdout=sp.PIPE,
+                            )
+                            if p.returncode == 0:
+                                content = p.stdout.decode("utf-8", errors="ignore")
+                        elif _shutil.which("xsel"):
+                            p = sp.run(["xsel", "--clipboard", "-o"], stdout=sp.PIPE)
+                            if p.returncode == 0:
+                                content = p.stdout.decode("utf-8", errors="ignore")
+                except Exception:
+                    content = None
+                return json.dumps(
+                    {
+                        "status": "ok" if content is not None else "failed",
+                        "text": content,
+                    },
+                    ensure_ascii=False,
+                )
+
+            if name == "system.notify":
+                title = str(arguments.get("title") or "")
+                message = str(arguments.get("message") or "")
+                ok = False
+                try:
+                    import subprocess as sp
+                    import sys as _sys
+                    import shutil as _shutil
+
+                    if _sys.platform.startswith("darwin"):
+                        script = f"display notification {json.dumps(message)} with title {json.dumps(title)}"
+                        p = sp.run(["osascript", "-e", script])
+                        ok = p.returncode == 0
+                    elif _sys.platform.startswith("win"):
+                        # Best-effort toast via powershell balloon (minimal)
+                        p = sp.run(
+                            [
+                                "powershell",
+                                "-NoProfile",
+                                "[reflection.assembly]::loadwithpartialname('System.Windows.Forms') | Out-Null;$n=new-object system.windows.forms.notifyicon;$n.icon=[system.drawing.systemicons]::information;$n.visible=$true;$n.showballoontip(3000,%s,%s,[system.windows.forms.tooltipicon]::None)"
+                                % (json.dumps(title), json.dumps(message)),
+                            ]
+                        )
+                        ok = p.returncode == 0
+                    else:
+                        if _shutil.which("notify-send"):
+                            p = sp.run(["notify-send", title, message])
+                            ok = p.returncode == 0
+                except Exception:
+                    ok = False
+                return json.dumps(
+                    {"status": "ok" if ok else "failed"}, ensure_ascii=False
+                )
+
+            if name == "system.open_terminal":
+                import subprocess as sp
+                import sys as _sys
+                import os as _os
+                import shutil as _shutil
+
+                directory = str(arguments.get("directory") or _os.getcwd())
+                ok = False
+                try:
+                    if _sys.platform.startswith("darwin"):
+                        ok = (
+                            sp.run(["open", "-a", "Terminal", directory]).returncode
+                            == 0
+                        )
+                    elif _sys.platform.startswith("win"):
+                        ok = (
+                            sp.run(
+                                [
+                                    "cmd",
+                                    "/c",
+                                    "start",
+                                    "cmd",
+                                    "/K",
+                                    f"cd /d {directory}",
+                                ]
+                            ).returncode
+                            == 0
+                        )
+                    else:
+                        term = (
+                            _shutil.which("x-terminal-emulator")
+                            or _shutil.which("gnome-terminal")
+                            or _shutil.which("konsole")
+                        )
+                        if term:
+                            ok = (
+                                sp.run(
+                                    [term, "--working-directory", directory]
+                                ).returncode
+                                == 0
+                            )
+                except Exception:
+                    ok = False
+                return json.dumps(
+                    {"status": "ok" if ok else "failed"}, ensure_ascii=False
                 )
 
             # Unknown here; let other handlers try

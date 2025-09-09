@@ -38,6 +38,17 @@ def main(argv: list[str] | None = None) -> int:
         help="Allow ending on a plain assistant message",
     )
     parser.set_defaults(final_required=True)
+    parser.add_argument(
+        "--pretty",
+        action="store_true",
+        help="Pretty print output (Markdown/JSON) with colors",
+    )
+    parser.add_argument(
+        "--profile",
+        choices=["default", "code"],
+        default="default",
+        help="Preset system guidance (code uses files.* etc.)",
+    )
 
     args = parser.parse_args(argv)
 
@@ -48,15 +59,49 @@ def main(argv: list[str] | None = None) -> int:
         print("Tools-enabled LLM adapter is not available", file=sys.stderr)
         return 2
 
+    system_msg = args.system
+    if not system_msg and args.profile == "code":
+        system_msg = (
+            "You are a coding agent. Prefer domain.files -> files.mkdir/files.write to create files. "
+            "Use absolute paths. Do not print code inline; write files instead. Finish with assistant.final."
+        )
+
     result: dict[str, Any] = llm_tools.run_with_trace(
         prompt=args.prompt,
-        system_message=args.system,
+        system_message=system_msg,
         temperature=args.temp,
         max_tokens=args.max_tokens,
         tool_max_steps=args.steps,
         require_final_tool=args.final_required,
     )
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    if args.pretty:
+        try:
+            from rich.console import Console
+            from rich.panel import Panel
+            from rich.markdown import Markdown
+            from rich.syntax import Syntax
+            from rich import box
+
+            console = Console()
+            text = result.get("text", "") or ""
+            try:
+                obj = json.loads(text)
+                if isinstance(obj, dict) and obj.get("final_text"):
+                    text = obj.get("final_text") or ""
+                else:
+                    console.print(Panel(Syntax(json.dumps(obj, ensure_ascii=False, indent=2), "json"), title="assistant", box=box.ROUNDED, border_style="magenta"))
+                    text = ""
+            except Exception:
+                pass
+            if text:
+                console.print(Panel(Markdown(text), title="assistant", box=box.ROUNDED, border_style="magenta"))
+            # steps table
+            if result.get("steps"):
+                console.print_json(data=result.get("steps"))
+        except Exception:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+    else:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
 
 

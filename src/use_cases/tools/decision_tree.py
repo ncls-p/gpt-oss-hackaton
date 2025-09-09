@@ -121,6 +121,24 @@ class DecisionTreeToolsHandler(ToolsHandlerPort):
                 },
             },
             {
+                "name": "domain.describe",
+                "description": "Describe tools of the active domain (name, description, schema).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": True,
+                },
+            },
+            {
+                "name": "domain.reset",
+                "description": "Reset the active domain (back to top-level).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": True,
+                },
+            },
+            {
                 "name": "domain.web",
                 "description": "Select the 'web' domain to access web scraping tools.",
                 "parameters": {
@@ -196,6 +214,14 @@ class DecisionTreeToolsHandler(ToolsHandlerPort):
             return self._select("project")
         if name == "domain.git":
             return self._select("git")
+        if name == "domain.describe":
+            tools = [t for t in self._domain_tools()] if self._active else []
+            return json.dumps(
+                {"active": self._active, "tools": tools}, ensure_ascii=False
+            )
+        if name == "domain.reset":
+            self._active = None
+            return json.dumps({"status": "ok", "active": None}, ensure_ascii=False)
         if name == "domain.web":
             return self._select("web")
 

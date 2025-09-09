@@ -6,6 +6,7 @@ import difflib
 import json
 import logging
 import re
+import time
 from collections.abc import Iterable
 from typing import Any, Callable, Optional, cast
 
@@ -258,9 +259,15 @@ class OpenAIToolsAdapter(OpenAIAdapter):
                     },
                 }
             )
-        # Always expose finalize/control tools to avoid brittle 400s
-        # when the model tries to finalize early.
-        tools.extend(self._control_tools())
+        # Expose finalize tools only if either final is not required
+        # or a real tool has been executed in this session.
+        try:
+            if (not getattr(self, "_require_final_tool", False)) or getattr(
+                self, "_expose_final", False
+            ):
+                tools.extend(self._control_tools())
+        except Exception:
+            tools.extend(self._control_tools())
         return tools
 
     def _augment_system_message(
@@ -374,6 +381,8 @@ class OpenAIToolsAdapter(OpenAIAdapter):
         )
 
         # Execute each tool and add output to history
+        # simple de-dup within a session
+        seen = getattr(self, "_seen_tool_calls", set())
         for tool_call in tool_calls:
             # Guard custom/unknown tool call types
             if not hasattr(tool_call, "function"):
@@ -384,6 +393,11 @@ class OpenAIToolsAdapter(OpenAIAdapter):
                 parsed_args = json.loads(args)
             except Exception:
                 parsed_args = {}
+            key = None
+            try:
+                key = (str(name), json.dumps(parsed_args, sort_keys=True))
+            except Exception:
+                pass
             # Intercept control tool (accept common aliases)
             if isinstance(name, str) and name.lower() in {
                 self._FINAL_TOOL_NAME,
@@ -414,6 +428,9 @@ class OpenAIToolsAdapter(OpenAIAdapter):
             if not isinstance(name, str) or not name:
                 # Skip invalid tool call names
                 continue
+            # skip duplicate calls
+            if key and key in seen:
+                continue
             try:
                 result = self._tools_handler.dispatch(name, parsed_args)
             except Exception as tool_exc:
@@ -432,6 +449,9 @@ class OpenAIToolsAdapter(OpenAIAdapter):
                     result = f"Tool error: {tool_exc}"
             # A real non-final tool was executed; now allow finalize
             self._expose_final = True
+            if key:
+                seen.add(key)
+                setattr(self, "_seen_tool_calls", seen)
             messages.append(
                 cast(
                     ChatCompletionMessageParam,
@@ -591,6 +611,7 @@ class OpenAIToolsAdapter(OpenAIAdapter):
             tools = self._to_openai_tools()
 
             self._last_final_text = None
+
             for _ in range(tool_max_steps):
                 try:
                     response = self.client.chat.completions.create(
@@ -688,8 +709,12 @@ class OpenAIToolsAdapter(OpenAIAdapter):
             last_assistant_text: Optional[str] = None
 
             self._last_final_text = None
+            setattr(self, "_seen_tool_calls", set())
+            last_usage: dict[str, Any] | None = None
+            api_duration_ms: float | None = None
             for _ in range(tool_max_steps):
                 try:
+                    t0 = time.time()
                     response = self.client.chat.completions.create(
                         model=self.model,
                         messages=cast(Iterable[ChatCompletionMessageParam], messages),
@@ -698,12 +723,26 @@ class OpenAIToolsAdapter(OpenAIAdapter):
                         tools=cast(Iterable[ChatCompletionToolParam], tools),  # type: ignore
                         tool_choice="auto",
                     )
+                    api_duration_ms = (time.time() - t0) * 1000.0
+                    try:
+                        usage = getattr(response, "usage", None)
+                        if usage:
+                            last_usage = {
+                                "prompt_tokens": getattr(usage, "prompt_tokens", None),
+                                "completion_tokens": getattr(
+                                    usage, "completion_tokens", None
+                                ),
+                                "total_tokens": getattr(usage, "total_tokens", None),
+                            }
+                    except Exception:
+                        pass
                 except Exception as api_exc:
                     if self._is_tool_use_error(api_exc):
                         # Provide error + tools to the model and retry with tools enabled
                         messages.append(
                             self._assistant_msg_with_error_and_tools(api_exc)
                         )
+                        t0 = time.time()
                         response = self.client.chat.completions.create(
                             model=self.model,
                             messages=cast(
@@ -714,8 +753,26 @@ class OpenAIToolsAdapter(OpenAIAdapter):
                             tools=cast(Iterable[ChatCompletionToolParam], tools),  # type: ignore
                             tool_choice="auto",
                         )
+                        api_duration_ms = (time.time() - t0) * 1000.0
+                        try:
+                            usage = getattr(response, "usage", None)
+                            if usage:
+                                last_usage = {
+                                    "prompt_tokens": getattr(
+                                        usage, "prompt_tokens", None
+                                    ),
+                                    "completion_tokens": getattr(
+                                        usage, "completion_tokens", None
+                                    ),
+                                    "total_tokens": getattr(
+                                        usage, "total_tokens", None
+                                    ),
+                                }
+                        except Exception:
+                            pass
                     else:
                         # Fallback: attempt plain-text completion
+                        t0 = time.time()
                         response = self.client.chat.completions.create(
                             model=self.model,
                             messages=cast(
@@ -725,6 +782,7 @@ class OpenAIToolsAdapter(OpenAIAdapter):
                             max_tokens=max_tokens,
                             tool_choice="none",
                         )
+                        api_duration_ms = (time.time() - t0) * 1000.0
                 choice = response.choices[0]
                 msg = choice.message
 
@@ -758,7 +816,12 @@ class OpenAIToolsAdapter(OpenAIAdapter):
                         )
                         last_assistant_text = content.strip()
                     else:
-                        return {"text": content.strip(), "steps": steps}
+                        return {
+                            "text": content.strip(),
+                            "steps": steps,
+                            "usage": last_usage,
+                            "api_duration_ms": api_duration_ms,
+                        }
 
                 # Add assistant step (tool calls) and execute tools
                 tool_calls = list(getattr(msg, "tool_calls", []) or [])
@@ -788,6 +851,11 @@ class OpenAIToolsAdapter(OpenAIAdapter):
                         parsed_args = json.loads(args)
                     except Exception:
                         parsed_args = {}
+                    key = None
+                    try:
+                        key = (str(name), json.dumps(parsed_args, sort_keys=True))
+                    except Exception:
+                        pass
                     if isinstance(name, str) and name.lower() in {
                         self._FINAL_TOOL_NAME,
                         "assistant.final",
@@ -828,9 +896,18 @@ class OpenAIToolsAdapter(OpenAIAdapter):
                                 ),
                             )
                         )
-                        return {"text": final_text, "steps": steps}
+                        return {
+                            "text": final_text,
+                            "steps": steps,
+                            "usage": last_usage,
+                            "api_duration_ms": api_duration_ms,
+                        }
 
                     if not isinstance(name, str) or not name:
+                        continue
+                    # skip duplicate
+                    seen = getattr(self, "_seen_tool_calls", set())
+                    if key and key in seen:
                         continue
                     try:
                         result = self._tools_handler.dispatch(name, parsed_args)
@@ -854,6 +931,9 @@ class OpenAIToolsAdapter(OpenAIAdapter):
                             "result": str(result),
                         }
                     )
+                    if key:
+                        seen.add(key)
+                        setattr(self, "_seen_tool_calls", seen)
                     messages.append(
                         cast(
                             ChatCompletionMessageParam,
@@ -883,7 +963,12 @@ class OpenAIToolsAdapter(OpenAIAdapter):
                         text = str(steps[-1].get("result", ""))
                     except Exception:
                         text = ""
-                return {"text": text, "steps": steps}
+                return {
+                    "text": text,
+                    "steps": steps,
+                    "usage": last_usage,
+                    "api_duration_ms": api_duration_ms,
+                }
             raise LLMError("Reached tool step limit without a final answer")
         except Exception as e:
             if isinstance(e, LLMError):
@@ -971,6 +1056,7 @@ class OpenAIToolsAdapter(OpenAIAdapter):
             steps: list[dict[str, Any]] = []
             last_assistant_text: Optional[str] = None
             self._last_final_text = None
+            setattr(self, "_seen_tool_calls", set())
 
             for _ in range(tool_max_steps):
                 # Check for cooperative cancel before each step
@@ -1141,6 +1227,11 @@ class OpenAIToolsAdapter(OpenAIAdapter):
                         parsed_args = json.loads(args)
                     except Exception:
                         parsed_args = {}
+                    key = None
+                    try:
+                        key = (str(name), json.dumps(parsed_args, sort_keys=True))
+                    except Exception:
+                        pass
                     # Notify start of call
                     if on_step and isinstance(name, str) and name:
                         try:
@@ -1241,6 +1332,9 @@ class OpenAIToolsAdapter(OpenAIAdapter):
 
                     if not isinstance(name, str) or not name:
                         continue
+                    seen = getattr(self, "_seen_tool_calls", set())
+                    if key and key in seen:
+                        continue
                     try:
                         result = self._tools_handler.dispatch(name, parsed_args)
                     except Exception as tool_exc:
@@ -1259,6 +1353,9 @@ class OpenAIToolsAdapter(OpenAIAdapter):
                     steps.append(
                         {"name": name, "arguments": parsed_args, "result": str(result)}
                     )
+                    if key:
+                        seen.add(key)
+                        setattr(self, "_seen_tool_calls", seen)
                     if on_step:
                         try:
                             on_step(
