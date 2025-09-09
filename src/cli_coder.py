@@ -9,6 +9,15 @@ import sys
 import threading
 from typing import Any, List, Optional
 
+from rich import box
+
+# Rich for modern, colorful CLI and Markdown rendering
+from rich.console import Console
+from rich.markdown import Markdown
+from rich.panel import Panel
+from rich.syntax import Syntax
+from rich.table import Table
+
 from src.container import container
 
 # -------- Appearance helpers (no external deps) --------
@@ -121,6 +130,32 @@ def _shorten(obj: Any, width: Optional[int] = None) -> str:
     return s if len(s) <= width else (s[: width - 1] + "…")
 
 
+def _render_markdown_or_json(
+    console: Console, title: str, text: str, st: _Style
+) -> None:
+    """Render assistant text. If JSON, pretty-print; else render as Markdown."""
+    to_render = text
+    try:
+        obj = json.loads(text)
+        if isinstance(obj, dict) and obj.get("final_text"):
+            to_render = str(obj.get("final_text"))
+        else:
+            console.print(
+                Panel(
+                    Syntax(json.dumps(obj, ensure_ascii=False, indent=2), "json"),
+                    title=title,
+                    border_style="magenta",
+                    box=box.ROUNDED,
+                )
+            )
+            return
+    except Exception:
+        pass
+    console.print(
+        Panel(Markdown(to_render), title=title, border_style="magenta", box=box.ROUNDED)
+    )
+
+
 def interactive_main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         prog="hack-coder",
@@ -186,14 +221,20 @@ def interactive_main(argv: Optional[list[str]] = None) -> int:
     color_on = _supports_color()
     icons_on = True
     st = _Style(color_on, icons_on)
+    console = Console(highlight=True, soft_wrap=True)
 
-    # Banner
-    print(
-        st.c("\nHack Coder", st.BOLD), st.c("— interactive tools-enabled agent", st.DIM)
+    # Banner (rich)
+    console.print(
+        Panel(
+            "Hack Coder — interactive tools-enabled agent\n"
+            "Type /help for commands. Ctrl+C cancels the current turn.",
+            title="Hack Coder",
+            border_style="cyan",
+            box=box.ROUNDED,
+        )
     )
-    print(st.c("Type /help for commands. Ctrl+C cancels the current turn.", st.DIM))
     if system_message:
-        print(st.c("System preset active. Use /system to override.", st.DIM))
+        console.print("[dim]System preset active. Use /system to override.[/dim]")
 
     cancel_event = threading.Event()
 
@@ -211,7 +252,8 @@ def interactive_main(argv: Optional[list[str]] = None) -> int:
 
     while True:
         try:
-            prompt = input(st.c(f"{st.icon('user')} you> ", st.CYAN)).strip()
+            console.print(f"[cyan]{st.icon('user')} you> [/cyan]", end="")
+            prompt = input().strip()
         except EOFError:
             print()
             break
@@ -225,67 +267,81 @@ def interactive_main(argv: Optional[list[str]] = None) -> int:
         if prompt.startswith("/"):
             cmd, sargs = _parse_slash(prompt)
             if cmd in ("h", "help"):
-                _print_help(st)
+                tbl = Table(title="Commands", box=box.MINIMAL_DOUBLE_HEAD)
+                tbl.add_column("Command", style="cyan", no_wrap=True)
+                tbl.add_column("Description")
+                tbl.add_row("/help", "Show this help")
+                tbl.add_row("/system <text>", "Set/override system message")
+                tbl.add_row("/temp <float>", "Set temperature")
+                tbl.add_row("/steps <int>", "Set max tool steps per turn")
+                tbl.add_row("/final <on|off>", "Toggle require assistant.final")
+                tbl.add_row("/cwd [path]", "Show or change working directory")
+                tbl.add_row("/status", "Show current settings")
+                tbl.add_row("/color <on|off>", "Toggle colors")
+                tbl.add_row("/icons <on|off>", "Toggle icons")
+                tbl.add_row("/cls", "Clear the screen")
+                tbl.add_row("/save <file.json>", "Save conversation and steps")
+                tbl.add_row("/clear", "Clear conversation")
+                tbl.add_row("/exit", "Exit")
+                console.print(tbl)
                 continue
             if cmd == "system":
                 system_message = " ".join(sargs) if sargs else None
-                msg = (
-                    st.c("System set.", st.GREEN)
-                    if system_message
-                    else st.c("System cleared.", st.YELLOW)
-                )
-                print(msg)
+                msg = "[green]System set.[/green]" if system_message else "[yellow]System cleared.[/yellow]"
+                console.print(msg)
                 continue
             if cmd == "temp" and sargs:
                 try:
                     args.temp = float(sargs[0])
-                    print(st.c(f"Temperature = {args.temp}", st.BLUE))
+                    console.print(f"[blue]Temperature[/blue] = {args.temp}")
                 except ValueError:
-                    print(st.c("Invalid temp", st.RED))
+                    console.print("[red]Invalid temp[/red]")
                 continue
             if cmd == "steps" and sargs:
                 try:
                     args.steps = int(sargs[0])
-                    print(st.c(f"Tool steps = {args.steps}", st.BLUE))
+                    console.print(f"[blue]Tool steps[/blue] = {args.steps}")
                 except ValueError:
-                    print(st.c("Invalid steps", st.RED))
+                    console.print("[red]Invalid steps[/red]")
                 continue
             if cmd == "final" and sargs:
                 v = sargs[0].lower()
                 args.final_required = v in ("on", "true", "1", "yes")
-                print(st.c(f"final_required = {args.final_required}", st.BLUE))
+                console.print(f"[blue]final_required[/blue] = {args.final_required}")
                 continue
             if cmd == "color" and sargs:
                 v = sargs[0].lower()
                 color_on = v in ("on", "true", "1", "yes")
                 st = _Style(color_on, icons_on)
-                print(st.c("Colors updated.", st.GREEN))
+                console.print("[green]Colors updated.[/green]")
                 continue
             if cmd == "icons" and sargs:
                 v = sargs[0].lower()
                 icons_on = v in ("on", "true", "1", "yes")
                 st = _Style(color_on, icons_on)
-                print(st.c("Icons updated.", st.GREEN))
+                console.print("[green]Icons updated.[/green]")
                 continue
             if cmd == "status":
-                print(
-                    f"cwd: {os.getcwd()}\n"
-                    f"temperature: {args.temp}\n"
-                    f"steps: {args.steps}\n"
-                    f"final_required: {args.final_required}\n"
-                    f"colors: {color_on}\n"
-                    f"icons: {icons_on}\n"
-                )
+                stbl = Table(title="Status", box=box.SIMPLE_HEAVY)
+                stbl.add_column("Key", style="magenta")
+                stbl.add_column("Value")
+                stbl.add_row("cwd", os.getcwd())
+                stbl.add_row("temperature", str(args.temp))
+                stbl.add_row("steps", str(args.steps))
+                stbl.add_row("final_required", str(args.final_required))
+                stbl.add_row("colors", str(color_on))
+                stbl.add_row("icons", str(icons_on))
+                console.print(stbl)
                 continue
             if cmd == "cwd":
                 if not sargs:
-                    print(st.c(os.getcwd(), st.DIM))
+                    console.print(f"[dim]{os.getcwd()}[/dim]")
                 else:
                     try:
                         os.chdir(sargs[0])
-                        print(st.c(os.getcwd(), st.DIM))
+                        console.print(f"[dim]{os.getcwd()}[/dim]")
                     except Exception as e:
-                        print(st.c(f"Failed to chdir: {e}", st.RED))
+                        console.print(f"[red]Failed to chdir:[/red] {e}")
                 continue
             if cmd == "cls":
                 _clear_screen()
@@ -294,7 +350,7 @@ def interactive_main(argv: Optional[list[str]] = None) -> int:
                 messages.clear()
                 last_steps = []
                 last_text = ""
-                print(st.c("Conversation cleared.", st.YELLOW))
+                console.print("[yellow]Conversation cleared.[/yellow]")
                 continue
             if cmd == "save" and sargs:
                 path = sargs[0]
@@ -310,13 +366,13 @@ def interactive_main(argv: Optional[list[str]] = None) -> int:
                             ensure_ascii=False,
                             indent=2,
                         )
-                    print(f"{st.icon('save')} " + st.c(f"Saved to {path}", st.GREEN))
+                    console.print(f"{st.icon('save')} [green]Saved to[/green] {path}")
                 except Exception as e:
-                    print(st.c(f"Save failed: {e}", st.RED))
+                    console.print(f"[red]Save failed:[/red] {e}")
                 continue
             if cmd in ("exit", "quit", "q"):
                 break
-            print(st.c("Unknown command. /help for list.", st.RED))
+            console.print("[red]Unknown command.[/red] Use /help for list.")
             continue
 
         # Reset cancel flag for this turn
@@ -327,22 +383,18 @@ def interactive_main(argv: Optional[list[str]] = None) -> int:
             name = str(ev.get("name") or "?")
             if phase == "call":
                 args_str = _shorten(ev.get("arguments"))
-                print(
-                    st.c("tool> ", st.DIM)
-                    + st.c(f"{st.icon('call')} {name} ", st.CYAN)
-                    + st.c(args_str, st.DIM)
+                console.print(
+                    f"[dim]tool>[/dim] [cyan]{st.icon('call')} {name}[/cyan] [dim]{args_str}[/dim]"
                 )
             elif phase == "result":
                 res_str = _shorten(ev.get("result"))
-                print(
-                    st.c("tool> ", st.DIM)
-                    + st.c(f"{st.icon('ok')} {name} — ", st.GREEN)
-                    + res_str
+                console.print(
+                    f"[dim]tool>[/dim] [green]{st.icon('ok')} {name} —[/green] {res_str}"
                 )
             elif phase == "error":
                 err = _shorten(ev.get("error"))
-                print(
-                    st.c("tool> ", st.DIM) + st.c(f"{st.icon('err')} {err}", st.YELLOW)
+                console.print(
+                    f"[dim]tool>[/dim] [yellow]{st.icon('err')} {err}[/yellow]"
                 )
 
         # Execute one chat turn with tools
@@ -360,10 +412,10 @@ def interactive_main(argv: Optional[list[str]] = None) -> int:
             )
         except KeyboardInterrupt:
             cancel_event.set()
-            print(st.c("Cancelled.", st.YELLOW))
+            console.print("[yellow]Cancelled.[/yellow]")
             continue
         except Exception as e:
-            print(st.c(f"Error: {e}", st.RED))
+            console.print(f"[red]Error:[/red] {e}")
             continue
 
         # Update history from backend for continuity
@@ -371,9 +423,11 @@ def interactive_main(argv: Optional[list[str]] = None) -> int:
         last_steps = list(result.get("steps", []) or [])
         last_text = str(result.get("text", ""))
 
-        # Render assistant text (simple)
+        # Render assistant text (Markdown aware)
         if last_text:
-            print(st.c(f"{st.icon('assistant')} assistant> ", st.MAGENTA) + last_text)
+            _render_markdown_or_json(
+                console, f"{st.icon('assistant')} assistant", last_text, st
+            )
 
     return 0
 

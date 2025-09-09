@@ -9,6 +9,7 @@ dependencies = [
     "openai>=1.99.9",
     "pyside6>=6.9.2",
     "python-dotenv>=1.1.1",
+    "rich>=14.1.0",
     "selectolax>=0.3.34",
     "typing-extensions>=4.7",
     "uvicorn[standard]>=0.30.6",
