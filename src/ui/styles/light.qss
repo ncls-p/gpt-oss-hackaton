@@ -41,7 +41,15 @@ QLineEdit, QTextEdit, QTextBrowser, QSpinBox, QDoubleSpinBox {
   selection-background-color: #3E79F7;
   selection-color: #FFFFFF;
 }
+QLineEdit:focus, QTextEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus {
+  border-color: #3E79F7;
+}
 QTextBrowser { padding: 10px; }
+
+/* Chat input specific */
+QTextEdit#chatInput {
+  background: #FFFFFF;
+}
 
 QListWidget {
   background: #FFFFFF;
@@ -99,6 +107,7 @@ QSplitter::handle {
   width: 6px;
   margin: 6px 0;
 }
+QSplitter::handle:hover { background: #F4F6FA; }
 
 /* Scrollbars */
 QScrollBar:vertical {

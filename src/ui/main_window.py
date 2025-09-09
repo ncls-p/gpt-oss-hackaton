@@ -45,8 +45,18 @@ class ChatInput(QTextEdit):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setAcceptRichText(False)
-        self.setPlaceholderText("Type a message…")
-        self.setFixedHeight(70)
+        self.setPlaceholderText(
+            "Type a message…  (Enter to send • Shift+Enter for newline)"
+        )
+        # Auto-resize between min/max heights
+        self._min_h = 48
+        self._max_h = 180
+        self.setMinimumHeight(self._min_h)
+        self.setMaximumHeight(self._max_h)
+        try:
+            self.document().contentsChanged.connect(self._auto_resize)
+        except Exception:
+            pass
 
     def keyPressEvent(self, event) -> None:  # type: ignore[override]
         try:
@@ -60,6 +70,15 @@ class ChatInput(QTextEdit):
         except Exception:
             pass
         return super().keyPressEvent(event)
+
+    def _auto_resize(self) -> None:
+        try:
+            doc_h = int(self.document().size().height()) + 10
+            new_h = max(self._min_h, min(self._max_h, doc_h))
+            if new_h != self.height():
+                self.setFixedHeight(new_h)
+        except Exception:
+            pass
 
 
 class _ChatWorker(QObject):
@@ -269,6 +288,7 @@ class MainWindow(QMainWindow):
         chat_layout.setContentsMargins(12, 12, 12, 12)
         self.chat_view = QTextBrowser(chat_area)
         self.chat_view.setOpenExternalLinks(True)
+        self.chat_view.setReadOnly(True)
         self.chat_view.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
@@ -276,6 +296,7 @@ class MainWindow(QMainWindow):
         # input row
         input_row = QHBoxLayout()
         self.input_edit = ChatInput(chat_area)
+        self.input_edit.setObjectName("chatInput")
         self.input_edit.sendRequested.connect(self._on_send_clicked)
         self.send_btn = QPushButton("Send", chat_area)
         self.send_btn.setObjectName("primary")
@@ -588,6 +609,8 @@ class MainWindow(QMainWindow):
             text_user = "#0B0F1A"
             time_col = "#AAB2CF"
             page_bg = "transparent"
+            pre_bg = "#0F1117"
+            pre_border = "#272C3A"
         else:
             bg_assist = "#FFFFFF"
             border_assist = "#E5E9F2"
@@ -596,6 +619,8 @@ class MainWindow(QMainWindow):
             text_user = "#FFFFFF"
             time_col = "#667085"
             page_bg = "transparent"
+            pre_bg = "#F4F6FA"
+            pre_border = "#E5E9F2"
 
         css = f"""
         .chat {{
@@ -613,17 +638,122 @@ class MainWindow(QMainWindow):
           word-wrap: break-word;
           white-space: pre-wrap;
         }}
+        .bubble ul, .bubble ol {{ white-space: normal; margin: 8px 0 8px 24px; }}
         .assistant {{ background: {bg_assist}; color: {text_assist}; border: 1px solid {border_assist}; }}
         .user {{ background: {bg_user}; color: {text_user}; border: 0; }}
         .label {{ font-size: 10pt; opacity: 0.75; margin-bottom: 4px; color: {time_col}; }}
         a {{ color: inherit; text-decoration: underline; }}
-        code, pre {{ background: rgba(0,0,0,0.15); padding: 2px 4px; border-radius: 6px; }}
+        code {{ background: {pre_bg}; padding: 2px 4px; border-radius: 6px; border: 1px solid {pre_border}; }}
+        pre {{ background: {pre_bg}; padding: 10px; border-radius: 10px; overflow-x: auto; border: 1px solid {pre_border}; }}
         """
 
-        def to_html(text: str) -> str:
-            s = _html.escape(text or "")
-            s = s.replace("\n", "<br>")
-            return s
+        def _build_anchor(label: str, url: str) -> str:
+            try:
+                safe_label = _html.escape(label)
+                # only allow http/https links
+                href = url.strip()
+                if not (href.startswith("http://") or href.startswith("https://")):
+                    return safe_label
+                safe_href = _html.escape(href, quote=True)
+                return f'<a href="{safe_href}">{safe_label}</a>'
+            except Exception:
+                return _html.escape(label)
+
+        def _markdown_to_html(text: str) -> str:
+            # Lightweight, safe-ish Markdown: code blocks, inline code, links, bold/italic, simple lists
+            s = text or ""
+            # Normalize newlines
+            s = s.replace("\r\n", "\n").replace("\r", "\n")
+            import re
+
+            code_pat = re.compile(r"```([A-Za-z0-9_+-]+)?\n(.*?)\n```", re.DOTALL)
+            placeholders: list[str] = []
+
+            def _add_placeholder(html: str) -> str:
+                key = f"[[[[BLOCK_{len(placeholders)}]]]]"
+                placeholders.append(html)
+                return key
+
+            # Extract fenced code blocks
+            out_parts: list[str] = []
+            pos = 0
+            for m in code_pat.finditer(s):
+                out_parts.append(s[pos : m.start()])
+                lang = (m.group(1) or "").strip()
+                code = m.group(2)
+                code_esc = _html.escape(code)
+                lang_cls = f" lang-{_html.escape(lang)}" if lang else ""
+                html_cb = (
+                    f'<pre><code class="{lang_cls.strip()}">{code_esc}</code></pre>'
+                )
+                out_parts.append(_add_placeholder(html_cb))
+                pos = m.end()
+            out_parts.append(s[pos:])
+            s_no_code = "".join(out_parts)
+
+            # Convert links in non-code text to placeholders
+            link_pat = re.compile(r"\[([^\]]+)\]\(([^)\s]+)\)")
+
+            def _link_repl(m: re.Match) -> str:
+                return _add_placeholder(_build_anchor(m.group(1), m.group(2)))
+
+            s_no_code_links = link_pat.sub(_link_repl, s_no_code)
+
+            # Escape the remainder
+            safe = _html.escape(s_no_code_links)
+
+            # Inline code `...`
+            safe = re.sub(r"`([^`]+)`", lambda m: f"<code>{m.group(1)}</code>", safe)
+
+            # Bold and italic (very simple, non-nested)
+            safe = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", safe)
+            safe = re.sub(r"(?<!\*)\*([^*]+)\*(?!\*)", r"<em>\1</em>", safe)
+
+            # Simple lists: lines starting with - or * or 1. 2. ...
+            def _lists_to_html(block: str) -> str:
+                lines = block.split("\n")
+                res: list[str] = []
+                i = 0
+                bullet_re = re.compile(r"^\s*[-*]\s+(.*)")
+                num_re = re.compile(r"^\s*\d+[.)]\s+(.*)")
+                while i < len(lines):
+                    line = lines[i]
+                    m1 = bullet_re.match(line)
+                    m2 = num_re.match(line)
+                    if m1:
+                        items: list[str] = []
+                        while i < len(lines):
+                            mm = bullet_re.match(lines[i])
+                            if not mm:
+                                break
+                            items.append(f"<li>{mm.group(1)}</li>")
+                            i += 1
+                        res.append("<ul>" + "".join(items) + "</ul>")
+                        continue
+                    if m2:
+                        items = []
+                        while i < len(lines):
+                            mm = num_re.match(lines[i])
+                            if not mm:
+                                break
+                            items.append(f"<li>{mm.group(1)}</li>")
+                            i += 1
+                        res.append("<ol>" + "".join(items) + "</ol>")
+                        continue
+                    # normal line
+                    res.append(line)
+                    i += 1
+                return "\n".join(res)
+
+            safe = _lists_to_html(safe)
+
+            # Convert remaining newlines to <br>
+            safe = safe.replace("\n", "<br>")
+
+            # Re-insert placeholders
+            for idx, html in enumerate(placeholders):
+                safe = safe.replace(f"[[[[BLOCK_{idx}]]]]", html)
+            return safe
 
         parts: list[str] = [f"<style>{css}</style>", '<div class="chat">']
         for speaker, tx in blocks:
@@ -634,7 +764,7 @@ class MainWindow(QMainWindow):
             parts.append(
                 f'<div class="row {cls}"><div style="display:flex;flex-direction:column;align-items:{align};">'
                 f'<div class="label">{_html.escape(label)}</div>'
-                f'<div class="{bubble_cls}">{to_html(tx)}</div>'
+                f'<div class="{bubble_cls}">{_markdown_to_html(tx)}</div>'
                 f"</div></div>"
             )
         parts.append("</div>")
