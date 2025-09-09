@@ -28,6 +28,8 @@ hack-serve = "src.cli_serve:main"
 hack-tools = "src.cli_tools:main"
 # Launch the desktop UI (Qt)
 hack-ui = "src.ui.app:main"
+# Interactive coder CLI (terminal)
+hack-coder = "src.cli_coder:main"
 
 [dependency-groups]
 dev = [
@@ -40,4 +42,3 @@ dev = [
 
 [tool.uv]
 dev-dependencies = []
-
