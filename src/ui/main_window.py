@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import difflib
+import html as _html
 import json
 import textwrap
-from typing import Optional, Any, List
-import difflib
+from pathlib import Path
+from typing import Any, List, Optional, cast
 
 from PySide6.QtCore import QObject, Qt, QThread, Signal, Slot
-from PySide6.QtGui import QAction, QIcon, QTextCursor
+from PySide6.QtGui import QAction, QIcon, QPalette, QTextCursor
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QDoubleSpinBox,
     QFileDialog,
@@ -21,17 +24,19 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QSizePolicy,
     QSpinBox,
     QSplitter,
     QTextBrowser,
     QTextEdit,
     QToolBar,
     QVBoxLayout,
-    QSizePolicy,
     QWidget,
 )
 
 from src.container import container
+
+from .theme import ThemeName, toggle_theme
 
 
 class ChatInput(QTextEdit):
@@ -55,6 +60,7 @@ class ChatInput(QTextEdit):
         except Exception:
             pass
         return super().keyPressEvent(event)
+
 
 class _ChatWorker(QObject):
     started = Signal()
@@ -80,6 +86,20 @@ class _ChatWorker(QObject):
         self.max_tokens = max_tokens
         self.tool_max_steps = tool_max_steps
         self.require_final_tool = require_final_tool
+        # Cooperative cancellation flag
+        try:
+            from threading import Event
+
+            self._cancel_event = Event()
+        except Exception:
+            self._cancel_event = None  # type: ignore[assignment]
+
+    def request_cancel(self) -> None:
+        try:
+            if self._cancel_event is not None:
+                self._cancel_event.set()
+        except Exception:
+            pass
 
     @Slot()
     def run(self) -> None:
@@ -106,10 +126,16 @@ class _ChatWorker(QObject):
                 tool_max_steps=self.tool_max_steps,
                 require_final_tool=self.require_final_tool,
                 on_step=_emit_step,
+                should_cancel=(
+                    self._cancel_event.is_set if self._cancel_event else None
+                ),
             )
             self.finished.emit(result)
         except Exception as e:  # pragma: no cover
             self.error.emit(str(e))
+
+
+ASSETS_DIR = Path(__file__).with_name("assets") / "icons"
 
 
 class MainWindow(QMainWindow):
@@ -126,24 +152,49 @@ class MainWindow(QMainWindow):
         self._last_final_raw: str = ""
         self._last_steps: List[dict[str, Any]] = []
         self._live_steps: List[dict[str, Any]] = []
+        try:
+            app = QApplication.instance()
+            prop = app.property("activeTheme") if app else None  # type: ignore[attr-defined]
+            if isinstance(prop, str) and prop in ("dark", "light"):
+                self._theme = prop  # type: ignore[assignment]
+            else:
+                win_col = self.palette().color(QPalette.ColorRole.Window)
+                self._theme = "dark" if win_col.lightness() < 128 else "light"  # type: ignore[assignment]
+        except Exception:
+            self._theme = "dark"  # type: ignore[assignment]
 
     # UI building
     def _build_actions(self) -> None:
-        self.action_run = QAction(QIcon(), "Send", self)
+        send_icon = QIcon(str(ASSETS_DIR / "send.svg"))
+        save_icon = QIcon(str(ASSETS_DIR / "save.svg"))
+        clear_icon = QIcon(str(ASSETS_DIR / "clear.svg"))
+        stop_icon = QIcon(str(ASSETS_DIR / "stop.svg"))
+
+        self.action_run = QAction(send_icon, "Send", self)
         self.action_run.triggered.connect(self._on_send_clicked)
 
-        self.action_save = QAction(QIcon(), "Save Conversation…", self)
+        self.action_save = QAction(save_icon, "Save Conversation…", self)
         self.action_save.triggered.connect(self._on_save_clicked)
 
-        self.action_clear = QAction(QIcon(), "Clear", self)
+        self.action_clear = QAction(clear_icon, "Clear", self)
         self.action_clear.triggered.connect(self._on_clear_clicked)
+
+        self.action_toggle_theme = QAction("Toggle Theme", self)
+        self.action_toggle_theme.triggered.connect(self._on_toggle_theme)
+
+        self.action_stop = QAction(stop_icon, "Stop", self)
+        self.action_stop.triggered.connect(self._on_cancel_clicked)
+        self.action_stop.setEnabled(False)
 
     def _build_toolbar(self) -> None:
         tb = QToolBar("Main", self)
         tb.setMovable(False)
         tb.addAction(self.action_run)
         tb.addAction(self.action_save)
+        tb.addAction(self.action_stop)
         tb.addAction(self.action_clear)
+        tb.addSeparator()
+        tb.addAction(self.action_toggle_theme)
         self.addToolBar(tb)
 
     def _build_layout(self) -> None:
@@ -154,7 +205,15 @@ class MainWindow(QMainWindow):
 
         # Left: Settings
         left = QWidget(splitter)
+        left.setObjectName("sidePanel")
         form = QFormLayout(left)
+        form.setFormAlignment(Qt.AlignmentFlag.AlignTop)
+        try:
+            form.setHorizontalSpacing(12)
+            form.setVerticalSpacing(10)
+        except Exception:
+            pass
+        form.setContentsMargins(12, 12, 12, 12)
 
         self.system_edit = QLineEdit(left)
         self.system_edit.setPlaceholderText("You are a computer assistant… (optional)")
@@ -177,6 +236,11 @@ class MainWindow(QMainWindow):
         self.final_required_chk.setChecked(True)
 
         run_btn = QPushButton("Send", left)
+        run_btn.setObjectName("primary")
+        try:
+            run_btn.setIcon(QIcon(str(ASSETS_DIR / "send.svg")))
+        except Exception:
+            pass
         run_btn.clicked.connect(self._on_send_clicked)
 
         self.progress = QProgressBar(left)
@@ -200,31 +264,58 @@ class MainWindow(QMainWindow):
 
         # Top: Chat area
         chat_area = QWidget(right_splitter)
+        chat_area.setObjectName("card")
         chat_layout = QVBoxLayout(chat_area)
+        chat_layout.setContentsMargins(12, 12, 12, 12)
         self.chat_view = QTextBrowser(chat_area)
         self.chat_view.setOpenExternalLinks(True)
-        self.chat_view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.chat_view.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
 
         # input row
         input_row = QHBoxLayout()
         self.input_edit = ChatInput(chat_area)
         self.input_edit.sendRequested.connect(self._on_send_clicked)
         self.send_btn = QPushButton("Send", chat_area)
+        self.send_btn.setObjectName("primary")
+        try:
+            self.send_btn.setIcon(QIcon(str(ASSETS_DIR / "send.svg")))
+        except Exception:
+            pass
         self.send_btn.clicked.connect(self._on_send_clicked)
+        self.stop_btn = QPushButton("Stop", chat_area)
+        try:
+            self.stop_btn.setIcon(QIcon(str(ASSETS_DIR / "stop.svg")))
+        except Exception:
+            pass
+        self.stop_btn.clicked.connect(self._on_cancel_clicked)
+        self.stop_btn.setEnabled(False)
         input_row.addWidget(self.input_edit)
         input_row.addWidget(self.send_btn)
+        input_row.addWidget(self.stop_btn)
 
-        chat_layout.addWidget(QLabel("Conversation"))
+        title_lbl = QLabel("Conversation")
+        title_lbl.setStyleSheet(
+            "font-weight: 600; font-size: 13.5pt; margin-bottom: 2px;"
+        )
+        chat_layout.addWidget(title_lbl)
         chat_layout.addWidget(self.chat_view)
         chat_layout.addLayout(input_row)
 
         # Bottom: Steps area
         steps_area = QWidget(right_splitter)
+        steps_area.setObjectName("card")
         steps_layout = QVBoxLayout(steps_area)
+        steps_layout.setContentsMargins(12, 12, 12, 12)
         self.steps_list = QListWidget(steps_area)
         self.steps_list.itemDoubleClicked.connect(self._show_step_details)
 
-        steps_layout.addWidget(QLabel("Tool Steps (double-click for details)"))
+        steps_title = QLabel("Tool Steps (double-click for details)")
+        steps_title.setStyleSheet(
+            "font-weight: 600; font-size: 12.5pt; margin-bottom: 2px;"
+        )
+        steps_layout.addWidget(steps_title)
         steps_layout.addWidget(self.steps_list)
 
         right_splitter.addWidget(chat_area)
@@ -239,9 +330,30 @@ class MainWindow(QMainWindow):
         splitter.setStretchFactor(1, 2)
 
         outer = QHBoxLayout(central)
+        outer.setContentsMargins(12, 12, 12, 12)
+        outer.setSpacing(12)
         outer.addWidget(splitter)
 
     # Slots
+    @Slot()
+    def _on_toggle_theme(self) -> None:
+        app = QApplication.instance()
+        if app is None:
+            return
+        # Ensure type for static checkers
+        app_qt = cast(QApplication, app)
+        try:
+            current_prop = app_qt.property("activeTheme")
+            current: ThemeName
+            if isinstance(current_prop, str) and current_prop in ("dark", "light"):
+                current = current_prop
+            else:
+                current = self._theme if self._theme in ("dark", "light") else "dark"
+            new_theme = toggle_theme(app_qt, current)
+            self._theme = new_theme
+        except Exception:
+            pass
+
     @Slot()
     def _on_send_clicked(self) -> None:
         user_text = self.input_edit.toPlainText().strip()
@@ -264,6 +376,8 @@ class MainWindow(QMainWindow):
         try:
             self.input_edit.setEnabled(False)
             self.send_btn.setEnabled(False)
+            self.stop_btn.setEnabled(True)
+            self.action_stop.setEnabled(True)
         except Exception:
             pass
         self.steps_list.clear()
@@ -287,6 +401,23 @@ class MainWindow(QMainWindow):
 
         self._thread.start()
 
+    @Slot()
+    def _on_cancel_clicked(self) -> None:
+        # Request cooperative cancel on running worker
+        w = getattr(self, "_worker", None)
+        if w is None:
+            return
+        try:
+            w.request_cancel()
+        except Exception:
+            pass
+        # UI feedback for stopping
+        try:
+            self.action_stop.setEnabled(False)
+            self.stop_btn.setEnabled(False)
+        except Exception:
+            pass
+
     @Slot(dict)
     def _on_chat_finished(self, result: dict) -> None:
         self.progress.setVisible(False)
@@ -294,6 +425,8 @@ class MainWindow(QMainWindow):
             self.input_edit.setEnabled(True)
             self.send_btn.setEnabled(True)
             self.input_edit.setFocus()
+            self.stop_btn.setEnabled(False)
+            self.action_stop.setEnabled(False)
         except Exception:
             pass
         # Update history from backend
@@ -320,6 +453,8 @@ class MainWindow(QMainWindow):
         try:
             self.input_edit.setEnabled(True)
             self.send_btn.setEnabled(True)
+            self.stop_btn.setEnabled(False)
+            self.action_stop.setEnabled(False)
         except Exception:
             pass
         QMessageBox.critical(self, "Chat error", message)
@@ -342,9 +477,13 @@ class MainWindow(QMainWindow):
     def _on_save_clicked(self) -> None:
         # Save the full conversation and last steps
         if not self._chat_history and self.steps_list.count() == 0:
-            QMessageBox.information(self, "Nothing to save", "Start a conversation first.")
+            QMessageBox.information(
+                self, "Nothing to save", "Start a conversation first."
+            )
             return
-        path, _ = QFileDialog.getSaveFileName(self, "Save conversation", filter="JSON (*.json)")
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save conversation", filter="JSON (*.json)"
+        )
         if not path:
             return
         steps = []
@@ -373,7 +512,7 @@ class MainWindow(QMainWindow):
 
     # Helpers
     def _render_conversation(self) -> None:
-        # Rebuild the conversation view using Markdown and merge near-duplicates
+        # Rebuild the conversation view using chat bubbles (assistant left, user right)
         blocks: list[tuple[str, str]] = []  # (speaker, content)
 
         def _norm(s: str) -> str:
@@ -407,7 +546,7 @@ class MainWindow(QMainWindow):
                             except Exception:
                                 pass
                     tools_str = (" — tools: " + ", ".join(names)) if names else ""
-                    disp = f"_Tool error_: {err}{tools_str}"
+                    disp = f"Tool error: {err}{tools_str}"
                 else:
                     disp = self._extract_display_text(content)
             except Exception:
@@ -437,14 +576,77 @@ class MainWindow(QMainWindow):
 
             blocks.append((speaker, disp))
 
-        md = (
-            "\n\n".join(f"**{sp}:**\n\n{tx}".strip() for sp, tx in blocks) if blocks else ""
-        )
+        # Build themed CSS for bubbles
+        theme = getattr(self, "_theme", "dark")
+        if theme not in ("dark", "light"):
+            theme = "dark"
+        if theme == "dark":
+            bg_assist = "#1B1E27"
+            border_assist = "#272C3A"
+            text_assist = "#D8DEEC"
+            bg_user = "#6C9CFF"
+            text_user = "#0B0F1A"
+            time_col = "#AAB2CF"
+            page_bg = "transparent"
+        else:
+            bg_assist = "#FFFFFF"
+            border_assist = "#E5E9F2"
+            text_assist = "#2D3340"
+            bg_user = "#3E79F7"
+            text_user = "#FFFFFF"
+            time_col = "#667085"
+            page_bg = "transparent"
+
+        css = f"""
+        .chat {{
+          background: {page_bg};
+          font-size: 12.5pt;
+          line-height: 1.35;
+        }}
+        .row {{ display: flex; margin: 8px 0; }}
+        .left {{ justify-content: flex-start; }}
+        .right {{ justify-content: flex-end; }}
+        .bubble {{
+          max-width: 78%;
+          padding: 10px 12px;
+          border-radius: 14px;
+          word-wrap: break-word;
+          white-space: pre-wrap;
+        }}
+        .assistant {{ background: {bg_assist}; color: {text_assist}; border: 1px solid {border_assist}; }}
+        .user {{ background: {bg_user}; color: {text_user}; border: 0; }}
+        .label {{ font-size: 10pt; opacity: 0.75; margin-bottom: 4px; color: {time_col}; }}
+        a {{ color: inherit; text-decoration: underline; }}
+        code, pre {{ background: rgba(0,0,0,0.15); padding: 2px 4px; border-radius: 6px; }}
+        """
+
+        def to_html(text: str) -> str:
+            s = _html.escape(text or "")
+            s = s.replace("\n", "<br>")
+            return s
+
+        parts: list[str] = [f"<style>{css}</style>", '<div class="chat">']
+        for speaker, tx in blocks:
+            cls = "right user" if speaker == "You" else "left assistant"
+            bubble_cls = "bubble user" if speaker == "You" else "bubble assistant"
+            label = "You" if speaker == "You" else "Assistant"
+            align = "flex-end" if speaker == "You" else "flex-start"
+            parts.append(
+                f'<div class="row {cls}"><div style="display:flex;flex-direction:column;align-items:{align};">'
+                f'<div class="label">{_html.escape(label)}</div>'
+                f'<div class="{bubble_cls}">{to_html(tx)}</div>'
+                f"</div></div>"
+            )
+        parts.append("</div>")
+        html_doc = "".join(parts)
+
         try:
-            self.chat_view.setMarkdown(md)
+            self.chat_view.setHtml(html_doc)
         except Exception:
-            # Fallback to plain text if Markdown not supported
-            self.chat_view.setPlainText(md)
+            # Fallback to plain text if HTML not supported
+            self.chat_view.setPlainText(
+                "\n\n".join(f"{sp}:\n{tx}" for sp, tx in blocks)
+            )
         # Auto-scroll to bottom on new content
         try:
             cursor = self.chat_view.textCursor()

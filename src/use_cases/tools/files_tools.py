@@ -4,6 +4,7 @@ Tools "files.*" mapped to the Files use cases.
 
 import json
 import logging
+import os
 from typing import Any, Optional
 
 from src.exceptions import LLMError
@@ -153,8 +154,23 @@ class FilesToolsHandler(ToolsHandlerPort):
             LLMError: If the tool name is unknown
         """
         try:
+
+            def _abs_dir(p: str) -> str:
+                s = str(p or "").strip()
+                s = os.path.expanduser(s)
+                if not os.path.isabs(s):
+                    s = os.path.abspath(os.path.join(os.getcwd(), s))
+                return s
+
+            def _abs_path(p: str) -> str:
+                s = str(p or "").strip()
+                s = os.path.expanduser(s)
+                if not os.path.isabs(s):
+                    s = os.path.abspath(os.path.join(os.getcwd(), s))
+                return s
+
             if name == "files.list":
-                directory = arguments["directory"]
+                directory = _abs_dir(arguments["directory"])
                 self._logger.info(
                     f"Executing files.list tool with directory: {directory}"
                 )
@@ -162,8 +178,8 @@ class FilesToolsHandler(ToolsHandlerPort):
                 return json.dumps([f.get_details() for f in files], ensure_ascii=False)
 
             if name == "files.search":
-                directory = arguments["directory"]
-                pattern = arguments["pattern"]
+                directory = _abs_dir(arguments["directory"])
+                pattern = str(arguments["pattern"])  # pattern is not a path
                 self._logger.info(
                     f"Executing files.search tool with directory: {directory}, pattern: {pattern}"
                 )
@@ -171,12 +187,10 @@ class FilesToolsHandler(ToolsHandlerPort):
                 return json.dumps([f.get_details() for f in files], ensure_ascii=False)
 
             if name == "files.read":
-                path = str(arguments["path"])  # required
+                path = _abs_path(arguments["path"])  # required
                 self._logger.info(f"Executing files.read tool with path: {path}")
                 try:
                     # Basic safeguards: size cap ~100KB
-                    import os
-
                     if not os.path.exists(path):
                         raise FileNotFoundError(path)
                     if not os.path.isfile(path):
@@ -219,7 +233,7 @@ class FilesToolsHandler(ToolsHandlerPort):
                     )
 
             if name == "files.write":
-                path = str(arguments.get("path") or "").strip()
+                path = _abs_path(arguments.get("path") or "")
                 content = str(arguments.get("content") or "")
                 overwrite = bool(arguments.get("overwrite", True))
                 if not path:
@@ -252,7 +266,7 @@ class FilesToolsHandler(ToolsHandlerPort):
                     )
 
             if name == "files.mkdir":
-                path = str(arguments.get("path") or "").strip()
+                path = _abs_path(arguments.get("path") or "")
                 exist_ok = bool(arguments.get("exist_ok", True))
                 if not path:
                     raise LLMError("'path' is required for files.mkdir")

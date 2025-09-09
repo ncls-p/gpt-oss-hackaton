@@ -5,6 +5,7 @@ Adapter OpenAI avec support des tools (function-calling).
 import difflib
 import json
 import logging
+import re
 from collections.abc import Iterable
 from typing import Any, Callable, Optional, cast
 
@@ -151,6 +152,22 @@ class OpenAIToolsAdapter(OpenAIAdapter):
 
         This is fed back to the model to help it recover with a valid tool call.
         """
+        # Try to surface the model's previous failed_generation to help it recover
+        failed_gen_snippet = None
+        try:
+            s = str(err)
+            m = re.search(r"failed_generation['\"]:\s*['\"](.+?)['\"]", s, re.DOTALL)
+            if m:
+                raw = m.group(1)
+                # Unescape common patterns so the model can see the structure
+                failed = raw.encode("utf-8").decode("unicode_escape")
+                # Keep it short to avoid flooding tokens
+                if len(failed) > 1200:
+                    failed = failed[:1200] + "…"
+                failed_gen_snippet = failed
+        except Exception:
+            failed_gen_snippet = None
+
         payload = {
             "notice": "tool_call_error",
             "error": str(err),
@@ -161,6 +178,13 @@ class OpenAIToolsAdapter(OpenAIAdapter):
             ),
             "available_tools": self._tools_catalog(),
         }
+        # Provide context of the previously failed generation, if detected
+        if failed_gen_snippet:
+            payload["previous_failed_generation"] = failed_gen_snippet
+            payload["retry_instruction"] = (
+                "In your next message, call exactly one tool using valid JSON in the 'arguments' field. "
+                "Do not include any explanatory text outside the tool call."
+            )
         try:
             content = json.dumps(payload, ensure_ascii=False)
         except Exception:
@@ -247,12 +271,38 @@ class OpenAIToolsAdapter(OpenAIAdapter):
         This improves reliability by nudging the model to produce valid JSON
         and to call the exact control tool name for finalization.
         """
+        # Gather execution environment to avoid wrong defaults like /root
+        try:
+            import os
+            import platform
+
+            user_home = os.path.expanduser("~")
+            cwd = os.getcwd()
+            os_name = platform.system()
+            os_release = platform.release()
+        except Exception:
+            user_home = ""
+            cwd = ""
+            os_name = ""
+            os_release = ""
+
+        env_ctx_lines = [
+            "Environment context:",
+            f"- OS: {os_name} {os_release}",
+            f"- USER_HOME: {user_home}",
+            f"- CWD: {cwd}",
+            "Guidance:",
+            "- Expand '~' to USER_HOME; do not assume /root or /home/user.",
+            "- Prefer absolute paths under CWD or USER_HOME when using files.*.",
+        ]
+
         rules = [
             "First, select a domain with domain.* (files/apps/system/project/git).",
             "Then, use the corresponding tools (e.g., files.list).",
             "Do not call assistant.final until you have used at least one non-final tool.",
             "When calling tools, arguments must be strict JSON (no prose, no markdown).",
             "Use the exact tool names provided; do not invent new names.",
+            "If a tool call fails to parse (tool_use_failed), immediately retry by calling a tool again with corrected strict JSON arguments, and do not include any extra text.",
             # Nudge for capability prompts so the model surfaces tools
             (
                 "If the user asks about your capabilities (e.g., 'what can you do',"
@@ -265,7 +315,12 @@ class OpenAIToolsAdapter(OpenAIAdapter):
             rules.append(
                 'When you are done, call assistant.final with {"final_text": "..."}.'
             )
-        prefix = "Tool usage rules:\n- " + "\n- ".join(rules) + "\n\n"
+        prefix = (
+            "\n".join(env_ctx_lines)
+            + "\n\nTool usage rules:\n- "
+            + "\n- ".join(rules)
+            + "\n\n"
+        )
         return prefix + (system_message or "You are a helpful assistant.")
 
     def _prepare_messages(
@@ -853,6 +908,15 @@ class OpenAIToolsAdapter(OpenAIAdapter):
             except Exception:
                 on_step = None
 
+            # Optional cooperative cancellation callback
+            should_cancel: Optional[Callable[[], bool]] = None
+            try:
+                scb = kwargs.get("should_cancel")
+                if callable(scb):
+                    should_cancel = cast(Callable[[], bool], scb)
+            except Exception:
+                should_cancel = None
+
             # Build/augment history
             history: list[ChatCompletionMessageParam] = []
             base_msgs = list(messages or [])
@@ -894,6 +958,21 @@ class OpenAIToolsAdapter(OpenAIAdapter):
             self._last_final_text = None
 
             for _ in range(tool_max_steps):
+                # Check for cooperative cancel before each step
+                try:
+                    if should_cancel and should_cancel():
+                        if on_step:
+                            try:
+                                on_step({"phase": "error", "error": "cancelled"})
+                            except Exception:
+                                pass
+                        return {
+                            "text": "Cancelled by user",
+                            "steps": steps,
+                            "messages": self._filter_ui_messages(history),
+                        }
+                except Exception:
+                    pass
                 try:
                     response = self.client.chat.completions.create(
                         model=self.model,
@@ -949,6 +1028,22 @@ class OpenAIToolsAdapter(OpenAIAdapter):
                 choice = response.choices[0]
                 msg = choice.message
 
+                # Check cancel between API response and processing
+                try:
+                    if should_cancel and should_cancel():
+                        if on_step:
+                            try:
+                                on_step({"phase": "error", "error": "cancelled"})
+                            except Exception:
+                                pass
+                        return {
+                            "text": "Cancelled by user",
+                            "steps": steps,
+                            "messages": self._filter_ui_messages(history),
+                        }
+                except Exception:
+                    pass
+
                 # If no tool calls, this is a plain assistant answer
                 if not getattr(msg, "tool_calls", None):
                     content: Optional[str] = msg.content
@@ -995,6 +1090,21 @@ class OpenAIToolsAdapter(OpenAIAdapter):
                 )
 
                 for tool_call in tool_calls:
+                    # Cancel before executing each tool
+                    try:
+                        if should_cancel and should_cancel():
+                            if on_step:
+                                try:
+                                    on_step({"phase": "error", "error": "cancelled"})
+                                except Exception:
+                                    pass
+                            return {
+                                "text": "Cancelled by user",
+                                "steps": steps,
+                                "messages": self._filter_ui_messages(history),
+                            }
+                    except Exception:
+                        pass
                     if not hasattr(tool_call, "function"):
                         continue
                     name = getattr(tool_call.function, "name", None)

@@ -8,6 +8,7 @@ from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import QApplication
 
 from .main_window import MainWindow
+from .theme import apply_theme
 
 
 def _apply_fusion_dark(app: QApplication) -> None:
@@ -41,9 +42,13 @@ def main(argv: Optional[list[str]] = None) -> int:
     argv = argv if argv is not None else sys.argv
 
     app = QApplication(argv)
-    # Dark theme unless explicitly disabled
-    if os.getenv("HACK_UI_THEME", "dark").lower() != "light":
-        _apply_fusion_dark(app)
+    # Apply modern theme (env HACK_UI_THEME can be 'light' or 'dark')
+    try:
+        apply_theme(app)
+    except Exception:
+        # Fallback to legacy dark palette
+        if os.getenv("HACK_UI_THEME", "dark").lower() != "light":
+            _apply_fusion_dark(app)
 
     win = MainWindow()
     win.show()
