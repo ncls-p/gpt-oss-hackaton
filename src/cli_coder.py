@@ -190,7 +190,9 @@ def interactive_main(argv: Optional[list[str]] = None) -> int:
         action="store_false",
         help="Allow ending on plain assistant message",
     )
-    parser.set_defaults(final_required=True)
+    # Default to not requiring assistant.final in the interactive CLI to avoid
+    # extra completion loops when a turn doesn't need tool calls.
+    parser.set_defaults(final_required=False)
     parser.add_argument(
         "--cwd",
         default=None,

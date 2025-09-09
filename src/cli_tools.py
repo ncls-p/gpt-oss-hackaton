@@ -37,7 +37,8 @@ def main(argv: list[str] | None = None) -> int:
         action="store_false",
         help="Allow ending on a plain assistant message",
     )
-    parser.set_defaults(final_required=True)
+    # Default to not requiring assistant.final for one-shot CLI
+    parser.set_defaults(final_required=False)
     parser.add_argument(
         "--pretty",
         action="store_true",
