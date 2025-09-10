@@ -92,7 +92,7 @@ class ToolsRequest(BaseModel):
     temperature: Optional[float] = Field(0.7, description="Temperature for generation")
     max_tokens: Optional[int] = Field(800, description="Maximum tokens to generate")
     tool_max_steps: Optional[int] = Field(
-        4, description="Maximum tool-calling steps before giving up"
+        100, description="Maximum tool-calling steps before giving up"
     )
     require_final_tool: Optional[bool] = Field(
         True, description="If true, require calling assistant.final to end"

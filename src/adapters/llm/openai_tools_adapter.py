@@ -577,7 +577,11 @@ class OpenAIToolsAdapter(OpenAIAdapter):
                 final_response = self._check_final_response(msg)
                 if final_response:
                     if require_final_tool:
-                        # Treat as intermediate and continue; add a nudge to call a tool next
+                        # If a real tool has already been executed in this session, accept
+                        # this plain answer as final to avoid loops.
+                        if getattr(self, "_expose_final", False):
+                            return final_response
+                        # Otherwise keep nudging to call a tool.
                         messages.append(
                             cast(
                                 ChatCompletionMessageParam,
@@ -683,6 +687,8 @@ class OpenAIToolsAdapter(OpenAIAdapter):
                 final_response = self._check_final_response(msg)
                 if final_response:
                     if require_final_tool:
+                        if getattr(self, "_expose_final", False):
+                            return final_response
                         messages.append(
                             cast(
                                 ChatCompletionMessageParam,
@@ -852,7 +858,15 @@ class OpenAIToolsAdapter(OpenAIAdapter):
                         except Exception:
                             raise LLMError("Empty response from the model")
                     if require_final_tool:
-                        # Treat as intermediate, keep going to encourage finalize
+                        # If at least one real tool was executed, accept as final to avoid loops
+                        if getattr(self, "_expose_final", False) or steps:
+                            return {
+                                "text": content.strip(),
+                                "steps": steps,
+                                "usage": last_usage,
+                                "api_duration_ms": api_duration_ms,
+                            }
+                        # Otherwise keep going and nudge in the next turn
                         messages.append(
                             cast(
                                 ChatCompletionMessageParam,
@@ -1221,6 +1235,14 @@ class OpenAIToolsAdapter(OpenAIAdapter):
                         except Exception:
                             raise LLMError("Empty response from the model")
                     if require_final_tool:
+                        # If at least one real tool was executed, accept content as final
+                        if getattr(self, "_expose_final", False) or steps:
+                            return {
+                                "text": content.strip(),
+                                "steps": steps,
+                                "messages": self._filter_ui_messages(history),
+                            }
+                        # Otherwise, add a gentle nudge and retry
                         history.append(
                             cast(
                                 ChatCompletionMessageParam,
@@ -1228,7 +1250,6 @@ class OpenAIToolsAdapter(OpenAIAdapter):
                             )
                         )
                         last_assistant_text = content.strip()
-                        # Add a nudge so the next turn uses tools
                         try:
                             history.append(
                                 self._assistant_msg_with_error_and_tools(
@@ -1243,7 +1264,6 @@ class OpenAIToolsAdapter(OpenAIAdapter):
                             )
                         except Exception:
                             pass
-                        # Retry next loop with the hint appended
                         continue
                     else:
                         history.append(

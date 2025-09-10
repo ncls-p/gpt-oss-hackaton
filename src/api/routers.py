@@ -203,7 +203,7 @@ def assistant_tools_stream(
     system_message: Optional[str] = Query(None),
     temperature: float = Query(0.7),
     max_tokens: int = Query(800),
-    tool_max_steps: int = Query(4),
+    tool_max_steps: int = Query(100),
     require_final_tool: bool = Query(True),
     allow_exec_custom: bool = Query(False),
 ):
@@ -327,7 +327,7 @@ def tools_ui():
       <label style=\"margin-left:12px\">Max tokens</label>
       <input id=\"max\" type=\"number\" value=\"800\" />
       <label style=\"margin-left:12px\">Tool steps</label>
-      <input id=\"steps\" type=\"number\" value=\"2\" />
+      <input id=\"steps\" type=\"number\" value=\"100\" />
       <label style=\"margin-left:12px\">Require final tool</label>
       <input id=\"finalRequired\" type=\"checkbox\" checked />
     </div>
