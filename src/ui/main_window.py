@@ -478,6 +478,13 @@ class MainWindow(QMainWindow):
         steps = int(self.steps_spin.value())
         final_required = bool(self.final_required_chk.isChecked())
 
+        # Prepare worker history BEFORE echoing user text locally
+        messages_copy: List[dict] = list(self._chat_history)
+
+        # Echo the user message immediately in the UI
+        self._chat_history.append({"role": "user", "content": user_text})
+        self._render_conversation()
+
         # Clear input and show progress; history will update after backend turn
         self.input_edit.clear()
 
@@ -495,8 +502,7 @@ class MainWindow(QMainWindow):
         self._live_steps = []
 
         self._thread = QThread(self)
-        # pass a shallow copy of history to the worker
-        messages_copy: List[dict] = list(self._chat_history)
+        # pass the copy captured before echoing to avoid duplicate user message
         self._worker = _ChatWorker(
             messages_copy,
             user_text,
@@ -757,6 +763,9 @@ class MainWindow(QMainWindow):
         a {{ color: inherit; text-decoration: underline; }}
         code {{ background: {pre_bg}; padding: 2px 4px; border-radius: 6px; border: 1px solid {pre_border}; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }}
         pre {{ background: {pre_bg}; padding: 10px; border-radius: 10px; overflow-x: auto; border: 1px solid {pre_border}; }}
+        table {{ border-collapse: collapse; margin: 8px 0; }}
+        th, td {{ border: 1px solid {pre_border}; padding: 6px 8px; }}
+        th {{ background: {pre_bg}; }}
         """
 
         def _build_anchor(label: str, url: str) -> str:
@@ -863,6 +872,40 @@ class MainWindow(QMainWindow):
                 return "\n".join(res)
 
             safe = _lists_to_html(safe)
+
+            # Simple Markdown tables (| a | b |) with a separator row (|---|---|)
+            def _tables_to_html(block: str) -> str:
+                lines = block.split("\n")
+                out: list[str] = []
+                i = 0
+                import re as _re
+                pipe_row = _re.compile(r"^\s*\|.*\|\s*$")
+                sep_row = _re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$")
+                while i < len(lines):
+                    if pipe_row.match(lines[i]) and (i + 1) < len(lines) and sep_row.match(lines[i + 1]):
+                        header = [c.strip() for c in _re.split(r"\s*\|\s*", lines[i].strip().strip('|'))]
+                        i += 2  # skip header and separator
+                        rows: list[list[str]] = []
+                        while i < len(lines) and pipe_row.match(lines[i]):
+                            row = [c.strip() for c in _re.split(r"\s*\|\s*", lines[i].strip().strip('|'))]
+                            rows.append(row)
+                            i += 1
+                        # Normalize column counts
+                        cols = len(header)
+                        def _pad(cells: list[str]) -> list[str]:
+                            return cells + [""] * max(0, cols - len(cells))
+                        header_html = ''.join(f"<th>{h}</th>" for h in _pad(header))
+                        body_rows = []
+                        for r in rows:
+                            rr = ''.join(f"<td>{c}</td>" for c in _pad(r))
+                            body_rows.append(f"<tr>{rr}</tr>")
+                        out.append("<table><thead><tr>" + header_html + "</tr></thead><tbody>" + "".join(body_rows) + "</tbody></table>")
+                        continue
+                    out.append(lines[i])
+                    i += 1
+                return "\n".join(out)
+
+            safe = _tables_to_html(safe)
 
             # Convert remaining newlines to <br>
             safe = safe.replace("\n", "<br>")
