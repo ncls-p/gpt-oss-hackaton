@@ -180,6 +180,7 @@ def assistant_tools(body: ToolsRequest):
             max_tokens=body.max_tokens,
             tool_max_steps=body.tool_max_steps,
             require_final_tool=body.require_final_tool,
+            allow_exec_custom=bool(body.allow_exec_custom),
             confirm_tool=_confirm_tool,
         )
 
@@ -255,6 +256,7 @@ def assistant_tools_stream(
                 tool_max_steps=tool_max_steps,
                 require_final_tool=require_final_tool,
                 on_step=on_step,
+                allow_exec_custom=bool(allow_exec_custom),
                 confirm_tool=confirm_tool,
             )
             q.put_nowait(

@@ -24,7 +24,7 @@ def main(argv: list[str] | None = None) -> int:
         "--max-tokens", type=int, default=800, help="Max tokens for the reply"
     )
     parser.add_argument(
-        "--steps", type=int, default=4, help="Maximum tool-calling steps"
+        "--steps", type=int, default=100, help="Maximum tool-calling steps"
     )
     parser.add_argument(
         "--final-required",
@@ -37,8 +37,8 @@ def main(argv: list[str] | None = None) -> int:
         action="store_false",
         help="Allow ending on a plain assistant message",
     )
-    # Default to not requiring assistant.final for one-shot CLI
-    parser.set_defaults(final_required=False)
+    # Default to requiring assistant.final so the model actually uses tools
+    parser.set_defaults(final_required=True)
     parser.add_argument(
         "--pretty",
         action="store_true",

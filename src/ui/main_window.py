@@ -45,7 +45,7 @@ DEFAULT_SYSTEM_MESSAGE = (
     "Tu es un assistant outillé. Sélectionne un domaine via domain.* (files/apps/system/project/git/web) "
     "puis appelle les outils correspondants: files.*, application.*, system.*, project.*, git.*, web.*. "
     "Si l'utilisateur demande ce que tu peux faire, appelle d'abord domain.list puis domain.describe pour résumer tes capacités et schémas. "
-    "Pour créer/modifier des fichiers: domain.files → files.mkdir, files.write, files.append, files.write_range (chemins absolus sous le workspace). "
+    "Pour créer/modifier des fichiers: domain.files → files.mkdir, files.write, files.append, files.write_range (chemins absolus sous le workspace). N'utilise pas system.exec_custom pour écrire des fichiers. "
     "Pour lire/rechercher dans le projet: project.search_text, project.read_range, project.symbols_index, project.find_refs. "
     "Pour Git (lecture): git.status, git.diff, git.log, git.show, git.blame, git.branch_list, git.current_branch. "
     "Pour OS: domain.system → privilégie system.exec_ro (ls/cat/rg/git); system.exec_custom est possible mais peut être bloqué par l'UI; system.open_url/open_path/notify/open_terminal/clipboard_*/os_info/resources/etc. "
@@ -181,6 +181,7 @@ class _ChatWorker(QObject):
                 tool_max_steps=self.tool_max_steps,
                 require_final_tool=self.require_final_tool,
                 on_step=_emit_step,
+                allow_exec_custom=bool(self.allow_exec_custom),
                 confirm_tool=_confirm_tool,
                 should_cancel=(
                     self._cancel_event.is_set if self._cancel_event else None
@@ -317,12 +318,12 @@ class MainWindow(QMainWindow):
         self.max_tokens_spin.setToolTip("Maximum tokens for the model response")
 
         self.steps_spin = QSpinBox(left)
-        self.steps_spin.setRange(1, 10)
-        self.steps_spin.setValue(4)
+        self.steps_spin.setRange(1, 1000)
+        self.steps_spin.setValue(100)
         self.steps_spin.setToolTip("Maximum number of tool-call iterations allowed")
 
         self.final_required_chk = QCheckBox("Require assistant.final to end", left)
-        self.final_required_chk.setChecked(False)
+        self.final_required_chk.setChecked(True)
         self.final_required_chk.setToolTip("If enabled, the assistant must call the final tool to finish")
 
         self.allow_exec_custom_chk = QCheckBox("Allow exec_custom (run custom commands)", left)

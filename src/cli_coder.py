@@ -352,7 +352,7 @@ def interactive_main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--system", default=None, help="Override system message")
     parser.add_argument("--temp", type=float, default=0.7, help="Temperature")
     parser.add_argument("--max-tokens", type=int, default=800, help="Max tokens")
-    parser.add_argument("--steps", type=int, default=8, help="Max tool steps per turn")
+    parser.add_argument("--steps", type=int, default=100, help="Max tool steps per turn")
     parser.add_argument(
         "--final-required",
         action="store_true",
@@ -364,9 +364,8 @@ def interactive_main(argv: Optional[list[str]] = None) -> int:
         action="store_false",
         help="Allow ending on plain assistant message",
     )
-    # Default to not requiring assistant.final in the interactive CLI to avoid
-    # extra completion loops when a turn doesn't need tool calls.
-    parser.set_defaults(final_required=False)
+    # Default to requiring assistant.final so the model reliably uses tools
+    parser.set_defaults(final_required=True)
     parser.add_argument(
         "--cwd",
         default=None,

@@ -32,6 +32,8 @@ class OpenAIToolsAdapter(OpenAIAdapter):
         # Session flags (reset per call)
         self._require_final_tool: bool = False
         self._expose_final: bool = False
+        # Whether system.exec_custom is allowed/exposed for this session
+        self._allow_exec_custom: bool = True
         # Last known final text for best-effort fallbacks
         self._last_final_text: Optional[str] = None
 
@@ -134,6 +136,9 @@ class OpenAIToolsAdapter(OpenAIAdapter):
         catalog: list[dict[str, Any]] = []
         try:
             for spec in self._tools_handler.available_tools():
+                # Hide system.exec_custom when not allowed for this session
+                if (not self._allow_exec_custom) and spec.get("name") == "system.exec_custom":
+                    continue
                 # Keep parameters but avoid over-bloating by shallow copying
                 catalog.append(
                     {
@@ -247,6 +252,9 @@ class OpenAIToolsAdapter(OpenAIAdapter):
     def _to_openai_tools(self) -> list[dict[str, Any]]:
         tools: list[dict[str, Any]] = []
         for spec in self._tools_handler.available_tools():
+            # Hide system.exec_custom when not allowed for this session
+            if (not self._allow_exec_custom) and spec.get("name") == "system.exec_custom":
+                continue
             tools.append(
                 {
                     "type": "function",
@@ -306,13 +314,13 @@ class OpenAIToolsAdapter(OpenAIAdapter):
         rules = [
             "First, select a domain with domain.* (files/apps/system/project/git/web).",
             "Then, use the corresponding tools (e.g., files.list).",
-            "To run OS commands, select domain.system and call system.exec_custom with strict JSON (the UI will ask the user to confirm).",
+            "For creating or modifying files, select domain.files and use files.mkdir/files.write/files.append/files.write_range. Do NOT use system.exec_custom to write files.",
+            "To run OS commands, select domain.system and call system.exec_custom with strict JSON (note: the UI may block it).",
             "For read-only shell queries, prefer system.exec_ro (allowlisted).",
             "Do not call assistant.final until you have used at least one non-final tool.",
             "When calling tools, arguments must be strict JSON (no prose, no markdown).",
             "Use the exact tool names provided; do not invent new names.",
             "If a tool call fails to parse (tool_use_failed), immediately retry by calling a tool again with corrected strict JSON arguments, and do not include any extra text.",
-            # Nudge for capability prompts so the model surfaces tools
             (
                 "If the user asks about your capabilities (e.g., 'what can you do',"
                 " 'liste ce que tu peux faire', 'tes outils'), prefer to call"
@@ -502,6 +510,8 @@ class OpenAIToolsAdapter(OpenAIAdapter):
             )
             tool_max_steps = kwargs.get("tool_max_steps", 4)
             require_final_tool = bool(kwargs.get("require_final_tool", False))
+            # Session toggle: allow/hide system.exec_custom
+            self._allow_exec_custom = bool(kwargs.get("allow_exec_custom", True))
 
             # Augment system message with tool rules to avoid invalid arguments
             aug_sys = self._augment_system_message(system_message, require_final_tool)
@@ -567,7 +577,7 @@ class OpenAIToolsAdapter(OpenAIAdapter):
                 final_response = self._check_final_response(msg)
                 if final_response:
                     if require_final_tool:
-                        # Treat as intermediate and continue; allow the model to call assistant.final
+                        # Treat as intermediate and continue; add a nudge to call a tool next
                         messages.append(
                             cast(
                                 ChatCompletionMessageParam,
@@ -577,6 +587,20 @@ class OpenAIToolsAdapter(OpenAIAdapter):
                                 ),
                             )
                         )
+                        try:
+                            messages.append(
+                                self._assistant_msg_with_error_and_tools(
+                                    LLMError(
+                                        "No tool was called yet. Please select a domain (e.g., domain.files) and call a tool with strict JSON arguments."
+                                    ),
+                                    hint=(
+                                        "For file creation/modification, call domain.files then files.mkdir/files.write. "
+                                        "For shell queries, prefer system.exec_ro. Custom commands may be blocked."
+                                    ),
+                                )
+                            )
+                        except Exception:
+                            pass
                     else:
                         return final_response
 
@@ -605,6 +629,8 @@ class OpenAIToolsAdapter(OpenAIAdapter):
             max_tokens = kwargs.get("max_tokens", 800)
             tool_max_steps = kwargs.get("tool_max_steps", 4)
             require_final_tool = bool(kwargs.get("require_final_tool", False))
+            # Session toggle
+            self._allow_exec_custom = bool(kwargs.get("allow_exec_custom", True))
 
             aug_sys = self._augment_system_message(system_message, require_final_tool)
             self._require_final_tool = require_final_tool
@@ -666,6 +692,20 @@ class OpenAIToolsAdapter(OpenAIAdapter):
                                 ),
                             )
                         )
+                        try:
+                            messages.append(
+                                self._assistant_msg_with_error_and_tools(
+                                    LLMError(
+                                        "No tool was called yet. Please select a domain (e.g., domain.files) and call a tool with strict JSON arguments."
+                                    ),
+                                    hint=(
+                                        "For file creation/modification, call domain.files then files.mkdir/files.write. "
+                                        "For shell queries, prefer system.exec_ro. Custom commands may be blocked."
+                                    ),
+                                )
+                            )
+                        except Exception:
+                            pass
                     else:
                         return final_response
 
@@ -699,6 +739,9 @@ class OpenAIToolsAdapter(OpenAIAdapter):
             max_tokens = kwargs.get("max_tokens", 800)
             tool_max_steps = kwargs.get("tool_max_steps", 4)
             require_final_tool = bool(kwargs.get("require_final_tool", True))
+
+            # Session toggle
+            self._allow_exec_custom = bool(kwargs.get("allow_exec_custom", True))
 
             sys_msg = system_message or "You are a helpful assistant."
             aug_sys = self._augment_system_message(sys_msg, require_final_tool)
@@ -1028,6 +1071,9 @@ class OpenAIToolsAdapter(OpenAIAdapter):
             except Exception:
                 confirm_tool = None
 
+            # Session toggle
+            self._allow_exec_custom = bool(kwargs.get("allow_exec_custom", True))
+
             # Build/augment history
             history: list[ChatCompletionMessageParam] = []
             base_msgs = list(messages or [])
@@ -1182,6 +1228,23 @@ class OpenAIToolsAdapter(OpenAIAdapter):
                             )
                         )
                         last_assistant_text = content.strip()
+                        # Add a nudge so the next turn uses tools
+                        try:
+                            history.append(
+                                self._assistant_msg_with_error_and_tools(
+                                    LLMError(
+                                        "No tool was called yet. Please select a domain (e.g., domain.files) and call a tool with strict JSON arguments."
+                                    ),
+                                    hint=(
+                                        "For file creation/modification, call domain.files then files.mkdir/files.write. "
+                                        "For shell queries, prefer system.exec_ro. Custom commands may be blocked."
+                                    ),
+                                )
+                            )
+                        except Exception:
+                            pass
+                        # Retry next loop with the hint appended
+                        continue
                     else:
                         history.append(
                             cast(
