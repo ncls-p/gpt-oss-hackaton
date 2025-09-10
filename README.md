@@ -11,6 +11,7 @@ A Python application demonstrating Clean Architecture principles with file opera
 - **Comprehensive Testing**: Full test suite with pytest
 - **HTTP API**: RESTful API endpoints for all functionality
 - **Tools API + UI**: Tools-enabled assistant endpoint with a minimal web UI
+- **System Controls**: New hardware/system tools (volume, brightness, idle, network, battery, processes)
 
 ## Installation
 
@@ -330,6 +331,12 @@ Below is the exhaustive list of tools exposed by the app, grouped by domain.
   - `system.clipboard_get`: read text from the clipboard
   - `system.notify`: system notification (title + message)
   - `system.open_terminal`: open a terminal at a given directory
+  - `system.set_volume`: set system output volume (0–100). macOS: AppleScript; Linux: `amixer`; Windows: WinMM.
+  - `system.network_info`: basic network info (interfaces, IPs) via `ifconfig`/`ipconfig`.
+  - `system.battery_info`: battery status (level/status). macOS: `pmset`; Linux: `/sys/class/power_supply`; Windows: `powercfg`.
+  - `system.process_list`: list active processes (limited). macOS/Linux: `ps aux`; Windows: `tasklist`. Accepts `limit` (1–50).
+  - `system.set_brightness`: adjust screen brightness (0.0–1.0). macOS: AppleScript; Linux: `xrandr`; Windows: not supported natively.
+  - `system.set_idle`: enable/disable idle/sleep with `timeout` seconds. macOS: `pmset`; Linux: `xset`; Windows: `powercfg`.
 
 - "Applications"
   - `application.open`: open an application by name, bundle id, or path (optional arguments)
@@ -348,6 +355,7 @@ Below is the exhaustive list of tools exposed by the app, grouped by domain.
 Notes:
 - "Files" tools enforce a safety boundary: paths constrained to `HACK_WORKSPACE_ROOT` (configurable), unless `HACK_WORKSPACE_ENFORCE=0`.
 - Several tools have size guards (e.g., reads ~100KB, diffs/outputs ~20KB) for stability.
+- Hardware/system controls are best-effort and platform-dependent; some require system utilities to be installed (`amixer`, `xrandr`, `xset`, etc.).
 
 ```bash
 curl -X POST "http://localhost:8000/assistant/tools" \

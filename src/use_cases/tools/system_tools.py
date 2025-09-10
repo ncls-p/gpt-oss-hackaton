@@ -192,6 +192,94 @@ class SystemToolsHandler(ToolsHandlerPort):
                     "additionalProperties": False,
                 },
             },
+            {
+                "name": "system.set_volume",
+                "description": "Ajuster le volume système (valeur entre 0 et 100) via AppleScript natif.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "level": {
+                            "type": "number",
+                            "description": "Niveau de volume (0 à 100)",
+                            "minimum": 0,
+                            "maximum": 100,
+                        }
+                    },
+                    "required": ["level"],
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "system.network_info",
+                "description": "Get basic network information: IP addresses, interfaces.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "system.battery_info",
+                "description": "Get battery status: level, time remaining (on laptops).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "system.process_list",
+                "description": "List active processes: PID, name, etc. (limited for security).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "limit": {
+                            "type": "integer",
+                            "description": "Max number of processes to list (default: 10)",
+                            "minimum": 1,
+                            "maximum": 50,
+                        }
+                    },
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "system.set_brightness",
+                "description": "Adjust screen brightness (value between 0 and 1).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "level": {
+                            "type": "number",
+                            "description": "Brightness level (0.0 to 1.0)",
+                            "minimum": 0.0,
+                            "maximum": 1.0,
+                        }
+                    },
+                    "required": ["level"],
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "system.set_idle",
+                "description": "Enable/disable idle mode (screen saver or sleep). If timeout=0, the PC goes to sleep immediately.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "enable": {
+                            "type": "boolean",
+                            "description": "True to enable idle, False to disable",
+                        },
+                        "timeout": {
+                            "type": "integer",
+                            "description": "Timeout in seconds (default: 300)",
+                            "minimum": 0,
+                        },
+                    },
+                    "required": ["enable"],
+                    "additionalProperties": False,
+                },
+            },
         ]
 
     def dispatch(self, name: str, arguments: dict[str, Any]) -> Any:
@@ -281,6 +369,248 @@ class SystemToolsHandler(ToolsHandlerPort):
                     ok = False
                 return json.dumps(
                     {"status": "ok" if ok else "failed", "path": p},
+                    ensure_ascii=False,
+                )
+
+            if name == "system.set_volume":
+                import subprocess
+                import sys
+
+                level = int(arguments.get("level", 50))
+                if not (0 <= level <= 100):
+                    raise LLMError("Le niveau de volume doit être entre 0 et 100.")
+                self._logger.info(f"Setting volume to {level}")
+                try:
+                    if sys.platform.startswith("darwin"):
+                        completed = subprocess.run(
+                            ["osascript", "-e", f"set volume output volume {level}"],
+                            capture_output=True,
+                            text=True,
+                        )
+                        ok = completed.returncode == 0
+                    elif sys.platform.startswith("linux"):
+                        completed = subprocess.run(
+                            ["amixer", "set", "Master", f"{level}%"],
+                            capture_output=True,
+                            text=True,
+                        )
+                        ok = completed.returncode == 0
+                    elif sys.platform.startswith("win"):
+                        import ctypes
+
+                        winmm = ctypes.WinDLL("winmm.dll")
+                        volume = int((level / 100.0) * 0xFFFF)
+                        volume_value = (volume << 16) | volume
+                        ok = winmm.waveOutSetVolume(0, volume_value) == 0
+                    else:
+                        raise LLMError("Plateforme non supportée.")
+                except Exception as e:
+                    self._logger.error(f"Erreur lors du réglage du volume : {e}")
+                    ok = False
+                return json.dumps(
+                    {"status": "ok" if ok else "failed", "volume": level},
+                    ensure_ascii=False,
+                )
+
+            if name == "system.network_info":
+                import subprocess
+                import sys
+
+                try:
+                    if sys.platform.startswith("darwin") or sys.platform.startswith(
+                        "linux"
+                    ):
+                        completed = subprocess.run(
+                            ["ifconfig"], capture_output=True, text=True
+                        )
+                        ok = completed.returncode == 0
+                        output = completed.stdout if ok else ""
+                    elif sys.platform.startswith("win"):
+                        completed = subprocess.run(
+                            ["ipconfig"], capture_output=True, text=True
+                        )
+                        ok = completed.returncode == 0
+                        output = completed.stdout if ok else ""
+                    else:
+                        raise LLMError("Plateforme non supportée.")
+                except Exception as e:
+                    self._logger.error(
+                        f"Erreur lors de la récupération des infos réseau : {e}"
+                    )
+                    ok = False
+                    output = ""
+                return json.dumps(
+                    {"status": "ok" if ok else "failed", "network_info": output},
+                    ensure_ascii=False,
+                )
+
+            if name == "system.battery_info":
+                import subprocess
+                import sys
+
+                try:
+                    if sys.platform.startswith("darwin"):
+                        completed = subprocess.run(
+                            ["pmset", "-g", "batt"], capture_output=True, text=True
+                        )
+                        ok = completed.returncode == 0
+                        output = completed.stdout if ok else ""
+                    elif sys.platform.startswith("linux"):
+                        try:
+                            with open("/sys/class/power_supply/BAT0/capacity", "r") as f:
+                                level = int(f.read().strip())
+                            with open("/sys/class/power_supply/BAT0/status", "r") as f:
+                                status = f.read().strip()
+                            output = f"Level: {level}%, Status: {status}"
+                            ok = True
+                        except Exception:
+                            ok = False
+                            output = ""
+                    elif sys.platform.startswith("win"):
+                        completed = subprocess.run(
+                            ["powercfg", "/batteryreport"], capture_output=True, text=True
+                        )
+                        ok = completed.returncode == 0
+                        output = completed.stdout if ok else ""
+                    else:
+                        raise LLMError("Plateforme non supportée.")
+                except Exception as e:
+                    self._logger.error(
+                        f"Erreur lors de la récupération des infos batterie : {e}"
+                    )
+                    ok = False
+                    output = ""
+                return json.dumps(
+                    {"status": "ok" if ok else "failed", "battery_info": output},
+                    ensure_ascii=False,
+                )
+
+            if name == "system.process_list":
+                import subprocess
+                import sys
+
+                limit = int(arguments.get("limit", 10))
+                if not (1 <= limit <= 50):
+                    raise LLMError("Limit doit être entre 1 et 50.")
+                try:
+                    if sys.platform.startswith("darwin"):
+                        completed = subprocess.run(["ps", "aux"], capture_output=True, text=True)
+                        ok = completed.returncode == 0
+                        lines = completed.stdout.strip().split("\n")[1:] if ok else []
+                    elif sys.platform.startswith("linux"):
+                        completed = subprocess.run(["ps", "aux", "--no-headers"], capture_output=True, text=True)
+                        ok = completed.returncode == 0
+                        lines = completed.stdout.strip().split("\n") if ok else []
+                    elif sys.platform.startswith("win"):
+                        completed = subprocess.run(["tasklist"], capture_output=True, text=True)
+                        ok = completed.returncode == 0
+                        lines = completed.stdout.strip().split("\n")[3:] if ok else []
+                        processes = [line.split() for line in lines[:limit]]
+                        output = [
+                            {"name": p[0], "pid": p[1], "mem": p[4] if len(p) > 4 else ""}
+                            for p in processes
+                        ]
+                    else:
+                        raise LLMError("Plateforme non supportée.")
+
+                    if sys.platform.startswith("darwin") or sys.platform.startswith("linux"):
+                        processes = [line.split(None, 10) for line in lines[:limit]]
+                        output = [
+                            {
+                                "pid": p[1],
+                                "user": p[0],
+                                "cpu": p[2],
+                                "mem": p[3],
+                                "command": p[10] if len(p) > 10 else "",
+                            }
+                            for p in processes
+                        ]
+                except Exception as e:
+                    self._logger.error(f"Erreur lors de la liste des processus : {e}")
+                    ok = False
+                    output = []
+                return json.dumps(
+                    {"status": "ok" if ok else "failed", "processes": output},
+                    ensure_ascii=False,
+                )
+
+            if name == "system.set_brightness":
+                import subprocess
+                import sys
+
+                level = float(arguments.get("level", 0.5))
+                if not (0.0 <= level <= 1.0):
+                    raise LLMError("Le niveau de luminosité doit être entre 0.0 et 1.0.")
+                self._logger.info(f"Setting brightness to {level}")
+                try:
+                    if sys.platform.startswith("darwin"):
+                        completed = subprocess.run(
+                            [
+                                "osascript",
+                                "-e",
+                                f'tell application "System Events" to set brightness of display 1 to {level}',
+                            ],
+                            capture_output=True,
+                            text=True,
+                        )
+                        ok = completed.returncode == 0
+                    elif sys.platform.startswith("linux"):
+                        completed = subprocess.run(
+                            ["xrandr", "--output", "LVDS-1", "--brightness", str(level)],
+                            capture_output=True,
+                            text=True,
+                        )
+                        ok = completed.returncode == 0
+                    elif sys.platform.startswith("win"):
+                        raise LLMError("Non supporté nativement sur Windows sans outils externes.")
+                    else:
+                        raise LLMError("Plateforme non supportée.")
+                except Exception as e:
+                    self._logger.error(f"Erreur lors du réglage de la luminosité : {e}")
+                    ok = False
+                return json.dumps(
+                    {"status": "ok" if ok else "failed", "brightness": level},
+                    ensure_ascii=False,
+                )
+
+            if name == "system.set_idle":
+                import subprocess
+                import sys
+
+                enable = arguments.get("enable", False)
+                timeout = int(arguments.get("timeout", 300))
+                if timeout < 0:
+                    raise LLMError("Timeout doit être positif.")
+                self._logger.info(f"Setting idle to {enable} with timeout {timeout}")
+                try:
+                    if sys.platform.startswith("darwin"):
+                        if enable:
+                            if timeout == 0:
+                                completed = subprocess.run(["pmset", "sleepnow"], capture_output=True, text=True)
+                            else:
+                                completed = subprocess.run(["pmset", "sleep", str(timeout)], capture_output=True, text=True)
+                        else:
+                            completed = subprocess.run(["pmset", "sleep", str(timeout)], capture_output=True, text=True)
+                        ok = completed.returncode == 0
+                    elif sys.platform.startswith("linux"):
+                        if enable:
+                            completed = subprocess.run(["xset", "s", str(timeout)], capture_output=True, text=True)
+                        else:
+                            completed = subprocess.run(["xset", "s", "off"], capture_output=True, text=True)
+                        ok = completed.returncode == 0
+                    elif sys.platform.startswith("win"):
+                        if enable:
+                            completed = subprocess.run(["powercfg", "/change", "standby-timeout-ac", str(timeout // 60)], capture_output=True, text=True)
+                        else:
+                            completed = subprocess.run(["powercfg", "/change", "standby-timeout-ac", "0"], capture_output=True, text=True)
+                        ok = completed.returncode == 0
+                    else:
+                        raise LLMError("Plateforme non supportée.")
+                except Exception as e:
+                    self._logger.error(f"Erreur lors du réglage du mode veille : {e}")
+                    ok = False
+                return json.dumps(
+                    {"status": "ok" if ok else "failed", "idle_enabled": enable, "timeout": timeout},
                     ensure_ascii=False,
                 )
 
