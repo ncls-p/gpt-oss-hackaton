@@ -135,3 +135,19 @@ QScrollBar::handle:horizontal {
 }
 QScrollBar::handle:horizontal:hover { background: #BFC9DB; }
 QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
+
+/* Status bar */
+QStatusBar {
+  background: #FFFFFF;
+  border-top: 1px solid #E5E9F2;
+}
+QStatusBar QLabel { color: #667085; padding: 0 8px; }
+
+/* Tooltips */
+QToolTip {
+  background-color: #FFFFFF;
+  color: #181C25;
+  border: 1px solid #E5E9F2;
+  padding: 6px 8px;
+  border-radius: 8px;
+}

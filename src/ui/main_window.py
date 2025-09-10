@@ -9,7 +9,7 @@ import os
 from typing import Any, List, Optional, cast
 
 from PySide6.QtCore import QObject, Qt, QThread, Signal, Slot
-from PySide6.QtGui import QAction, QIcon, QPalette, QTextCursor
+from PySide6.QtGui import QAction, QIcon, QPalette, QTextCursor, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSpinBox,
     QSplitter,
+    QStatusBar,
     QTextBrowser,
     QTextEdit,
     QToolBar,
@@ -186,6 +187,7 @@ class MainWindow(QMainWindow):
         self._build_actions()
         self._build_toolbar()
         self._build_layout()
+        self._build_statusbar()
         # Chat state
         self._chat_history: List[dict[str, Any]] = []
         self._last_final_raw: str = ""
@@ -210,18 +212,38 @@ class MainWindow(QMainWindow):
         stop_icon = QIcon(str(ASSETS_DIR / "stop.svg"))
 
         self.action_run = QAction(send_icon, "Send", self)
+        try:
+            self.action_run.setShortcut(QKeySequence(Qt.Modifier.CTRL | Qt.Key.Key_Return))
+        except Exception:
+            pass
         self.action_run.triggered.connect(self._on_send_clicked)
 
         self.action_save = QAction(save_icon, "Save Conversation…", self)
+        try:
+            self.action_save.setShortcut(QKeySequence.StandardKey.Save)
+        except Exception:
+            pass
         self.action_save.triggered.connect(self._on_save_clicked)
 
         self.action_clear = QAction(clear_icon, "Clear", self)
+        try:
+            self.action_clear.setShortcut(QKeySequence("Ctrl+K"))
+        except Exception:
+            pass
         self.action_clear.triggered.connect(self._on_clear_clicked)
 
         self.action_toggle_theme = QAction("Toggle Theme", self)
+        try:
+            self.action_toggle_theme.setShortcut(QKeySequence("Ctrl+`"))
+        except Exception:
+            pass
         self.action_toggle_theme.triggered.connect(self._on_toggle_theme)
 
         self.action_stop = QAction(stop_icon, "Stop", self)
+        try:
+            self.action_stop.setShortcut(QKeySequence("Ctrl+."))
+        except Exception:
+            pass
         self.action_stop.triggered.connect(self._on_cancel_clicked)
         self.action_stop.setEnabled(False)
 
@@ -256,29 +278,36 @@ class MainWindow(QMainWindow):
 
         self.system_edit = QLineEdit(left)
         self.system_edit.setPlaceholderText("You are a computer assistant… (optional)")
+        self.system_edit.setToolTip("System message sent to the model at the start of the conversation")
 
         self.temp_spin = QDoubleSpinBox(left)
         self.temp_spin.setDecimals(2)
         self.temp_spin.setRange(0.0, 2.0)
         self.temp_spin.setSingleStep(0.1)
         self.temp_spin.setValue(0.7)
+        self.temp_spin.setToolTip("Sampling temperature (0=cautious, 2=creative)")
 
         self.max_tokens_spin = QSpinBox(left)
         self.max_tokens_spin.setRange(16, 32000)
         self.max_tokens_spin.setValue(800)
+        self.max_tokens_spin.setToolTip("Maximum tokens for the model response")
 
         self.steps_spin = QSpinBox(left)
         self.steps_spin.setRange(1, 10)
         self.steps_spin.setValue(4)
+        self.steps_spin.setToolTip("Maximum number of tool-call iterations allowed")
 
         self.final_required_chk = QCheckBox("Require assistant.final to end", left)
         self.final_required_chk.setChecked(False)
+        self.final_required_chk.setToolTip("If enabled, the assistant must call the final tool to finish")
 
         self.allow_exec_custom_chk = QCheckBox("Allow exec_custom (run custom commands)", left)
         self.allow_exec_custom_chk.setChecked(False)
+        self.allow_exec_custom_chk.setToolTip("If disabled, custom command execution is blocked for safety")
 
         self.workspace_safety_chk = QCheckBox("Enforce workspace safety (restrict file ops to WORKSPACE_ROOT)", left)
         self.workspace_safety_chk.setChecked(False)
+        self.workspace_safety_chk.setToolTip("If enabled, Files tools are confined to WORKSPACE_ROOT")
         try:
             self.workspace_safety_chk.stateChanged.connect(self._on_toggle_workspace_safety)
         except Exception:
@@ -393,6 +422,29 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
+    def _build_statusbar(self) -> None:
+        sb = QStatusBar(self)
+        self.setStatusBar(sb)
+        # Model label
+        self._model_lbl = QLabel("Model: …")
+        self._state_lbl = QLabel("Ready")
+        self._safety_lbl = QLabel("Workspace safety: off")
+        try:
+            sb.addPermanentWidget(self._safety_lbl)
+            sb.addPermanentWidget(self._model_lbl)
+            sb.addWidget(self._state_lbl, 1)
+        except Exception:
+            pass
+        # Populate model if available
+        try:
+            llm = container.get_llm_adapter()
+            info = llm.get_model_info()
+            model = info.get("model") or "?"
+            prov = info.get("provider") or "?"
+            self._model_lbl.setText(f"Model: {prov}/{model}")
+        except Exception:
+            pass
+
     # Slots
     @Slot()
     def _on_toggle_theme(self) -> None:
@@ -458,6 +510,10 @@ class MainWindow(QMainWindow):
         self._worker.moveToThread(self._thread)
 
         self._thread.started.connect(self._worker.run)
+        try:
+            self._state_lbl.setText("Running…")
+        except Exception:
+            pass
         self._worker.finished.connect(self._on_chat_finished)
         self._worker.error.connect(self._on_chat_error)
         self._worker.step.connect(self._on_step_event)
@@ -488,6 +544,10 @@ class MainWindow(QMainWindow):
     def _on_chat_finished(self, result: dict) -> None:
         self.progress.setVisible(False)
         try:
+            self._state_lbl.setText("Ready")
+        except Exception:
+            pass
+        try:
             self.input_edit.setEnabled(True)
             self.send_btn.setEnabled(True)
             self.input_edit.setFocus()
@@ -516,6 +576,10 @@ class MainWindow(QMainWindow):
     @Slot(str)
     def _on_chat_error(self, message: str) -> None:  # pragma: no cover
         self.progress.setVisible(False)
+        try:
+            self._state_lbl.setText("Error")
+        except Exception:
+            pass
         try:
             self.input_edit.setEnabled(True)
             self.send_btn.setEnabled(True)
@@ -642,20 +706,20 @@ class MainWindow(QMainWindow):
 
             blocks.append((speaker, disp))
 
-        # Build themed CSS for bubbles
+        # Build themed CSS for bubbles (Qt rich text supports limited CSS)
         theme = getattr(self, "_theme", "dark")
         if theme not in ("dark", "light"):
             theme = "dark"
         if theme == "dark":
-            bg_assist = "#1B1E27"
-            border_assist = "#272C3A"
-            text_assist = "#D8DEEC"
+            bg_assist = "#1E2230"
+            border_assist = "#2A3040"
+            text_assist = "#E8EDFA"
             bg_user = "#6C9CFF"
             text_user = "#0B0F1A"
             time_col = "#AAB2CF"
             page_bg = "transparent"
             pre_bg = "#0F1117"
-            pre_border = "#272C3A"
+            pre_border = "#2A3040"
         else:
             bg_assist = "#FFFFFF"
             border_assist = "#E5E9F2"
@@ -671,25 +735,25 @@ class MainWindow(QMainWindow):
         .chat {{
           background: {page_bg};
           font-size: 12.5pt;
-          line-height: 1.35;
+          line-height: 1.38;
         }}
-        .row {{ display: flex; margin: 8px 0; }}
-        .left {{ justify-content: flex-start; }}
-        .right {{ justify-content: flex-end; }}
+        .row {{ margin: 6px 0; }}
+        .row.left {{ text-align: left; }}
+        .row.right {{ text-align: right; }}
         .bubble {{
+          display: inline-block;
           max-width: 78%;
           padding: 10px 12px;
           border-radius: 14px;
-          /* Robust wrapping even when there are long tokens or NBSP */
+          margin: 2px 0;
           white-space: pre-wrap;
-          word-wrap: break-word;           /* legacy */
-          overflow-wrap: anywhere;         /* modern */
-          word-break: break-word;          /* best-effort for Qt rich text */
+          word-wrap: break-word;
+          overflow-wrap: anywhere;
+          word-break: break-word;
         }}
         .bubble ul, .bubble ol {{ white-space: normal; margin: 8px 0 8px 24px; overflow-wrap: anywhere; word-break: break-word; }}
         .assistant {{ background: {bg_assist}; color: {text_assist}; border: 1px solid {border_assist}; }}
         .user {{ background: {bg_user}; color: {text_user}; border: 0; }}
-        .label {{ font-size: 10pt; opacity: 0.75; margin-bottom: 4px; color: {time_col}; }}
         a {{ color: inherit; text-decoration: underline; }}
         code {{ background: {pre_bg}; padding: 2px 4px; border-radius: 6px; border: 1px solid {pre_border}; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }}
         pre {{ background: {pre_bg}; padding: 10px; border-radius: 10px; overflow-x: auto; border: 1px solid {pre_border}; }}
@@ -810,15 +874,10 @@ class MainWindow(QMainWindow):
 
         parts: list[str] = [f"<style>{css}</style>", '<div class="chat">']
         for speaker, tx in blocks:
-            cls = "right user" if speaker == "You" else "left assistant"
+            cls = "right" if speaker == "You" else "left"
             bubble_cls = "bubble user" if speaker == "You" else "bubble assistant"
-            label = "You" if speaker == "You" else "Assistant"
-            align = "flex-end" if speaker == "You" else "flex-start"
             parts.append(
-                f'<div class="row {cls}"><div style="display:flex;flex-direction:column;align-items:{align};">'
-                f'<div class="label">{_html.escape(label)}</div>'
-                f'<div class="{bubble_cls}">{_markdown_to_html(tx)}</div>'
-                f"</div></div>"
+                f'<div class="row {cls}"><div class="{bubble_cls}">{_markdown_to_html(tx)}</div></div>'
             )
         parts.append("</div>")
         html_doc = "".join(parts)
@@ -886,19 +945,51 @@ class MainWindow(QMainWindow):
             self._live_steps.append(step)
 
     def _extract_display_text(self, text: str) -> str:
-        # If backend returned a JSON object as string, extract a useful field
+        """Return a clean user-visible string from backend content.
+
+        Supports raw JSON, or strings with prefixed tokens like
+        "<|channel|>final <|constrain|>json<|message|>{...}" by extracting
+        the JSON object and returning its 'final_text' when present.
+        """
         s = text or ""
+
+        def _from_obj(obj: object) -> str | None:
+            try:
+                if isinstance(obj, dict):
+                    for key in ("final_text", "text", "content", "message"):
+                        val = obj.get(key)  # type: ignore[call-arg]
+                        if isinstance(val, str) and val.strip():
+                            return val
+                    return json.dumps(obj, ensure_ascii=False)
+            except Exception:
+                return None
+            return None
+
+        # Direct JSON
         try:
             obj = json.loads(s)
-            if isinstance(obj, dict):
-                for key in ("final_text", "text", "content", "message"):
-                    val = obj.get(key)
-                    if isinstance(val, str) and val.strip():
-                        return val
-                # If nothing obvious, pretty‑print JSON minimally
-                return json.dumps(obj, ensure_ascii=False)
+            out = _from_obj(obj)
+            if out:
+                return out
         except Exception:
             pass
+
+        # Extract trailing/embedded JSON object
+        try:
+            i = s.find("{")
+            while i != -1:
+                try:
+                    candidate = s[i:]
+                    obj = json.loads(candidate)
+                    out = _from_obj(obj)
+                    if out:
+                        return out
+                except Exception:
+                    pass
+                i = s.find("{", i + 1)
+        except Exception:
+            pass
+
         return s
 
     # --- Quick System Controls handlers ---
@@ -956,8 +1047,50 @@ class MainWindow(QMainWindow):
             enforced = False
         try:
             os.environ["HACK_WORKSPACE_ENFORCE"] = "1" if enforced else "0"
+            if hasattr(self, "_safety_lbl"):
+                self._safety_lbl.setText(f"Workspace safety: {'on' if enforced else 'off'}")
         except Exception:
             pass
+
+    # Persist basic settings between sessions
+    def closeEvent(self, event) -> None:  # type: ignore[override]
+        try:
+            from PySide6.QtCore import QSettings
+            st = QSettings("gpt-oss", "hackathon-ui")
+            st.setValue("system", self.system_edit.text())
+            st.setValue("temp", self.temp_spin.value())
+            st.setValue("max_tokens", self.max_tokens_spin.value())
+            st.setValue("steps", self.steps_spin.value())
+            st.setValue("final_required", self.final_required_chk.isChecked())
+            st.setValue("allow_exec_custom", self.allow_exec_custom_chk.isChecked())
+            st.setValue("workspace_enforce", self.workspace_safety_chk.isChecked())
+        except Exception:
+            pass
+        return super().closeEvent(event)
+
+    def showEvent(self, event) -> None:  # type: ignore[override]
+        try:
+            from PySide6.QtCore import QSettings
+            st = QSettings("gpt-oss", "hackathon-ui")
+            val = st.value("system", "", str)
+            self.system_edit.setText(val)
+            t = st.value("temp", self.temp_spin.value(), float)
+            self.temp_spin.setValue(float(t))
+            mt = st.value("max_tokens", self.max_tokens_spin.value(), int)
+            self.max_tokens_spin.setValue(int(mt))
+            stp = st.value("steps", self.steps_spin.value(), int)
+            self.steps_spin.setValue(int(stp))
+            fr = st.value("final_required", self.final_required_chk.isChecked(), bool)
+            self.final_required_chk.setChecked(bool(fr))
+            ec = st.value("allow_exec_custom", self.allow_exec_custom_chk.isChecked(), bool)
+            self.allow_exec_custom_chk.setChecked(bool(ec))
+            we = st.value("workspace_enforce", self.workspace_safety_chk.isChecked(), bool)
+            self.workspace_safety_chk.setChecked(bool(we))
+            # Sync env from restored state
+            self._on_toggle_workspace_safety()
+        except Exception:
+            pass
+        return super().showEvent(event)
 
     @Slot()
     def _on_sys_set_volume(self) -> None:
