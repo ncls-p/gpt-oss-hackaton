@@ -292,6 +292,8 @@ Below is the exhaustive list of tools exposed by the app, grouped by domain.
   - `files.replace_ranges`: replace multiple, non-overlapping line ranges
   - `files.copy`: copy a file or directory (dirs_exist_ok)
   - `files.move`: move/rename a file or directory
+  - `files.copy_lines`: copy a 1-based inclusive line range to another file/position
+  - `files.move_lines`: move a 1-based inclusive line range to another file/position
   - `files.delete`: delete a file or directory (optionally recursive)
   - `files.detect_encoding`: detect encoding (utf-8/16/32)
   - `files.json_patch`: apply an RFC6902 JSON Patch to a JSON file
@@ -319,6 +321,7 @@ Below is the exhaustive list of tools exposed by the app, grouped by domain.
   - `system.open_url`: open a URL in the default browser
   - `system.open_path`: open a file/folder with the default application
   - `system.exec_ro`: run an allowlisted read-only command (`ls`, `cat`, `rg`, `git`)
+  - `system.exec_custom`: run a custom command (interactive CLI asks user confirmation)
   - `system.os_info`: OS and Python runtime info
   - `system.resources`: CPU, load average, disk, memory (total/available/used/percent, process RSS)
   - `system.screenshot`: take a PNG screenshot

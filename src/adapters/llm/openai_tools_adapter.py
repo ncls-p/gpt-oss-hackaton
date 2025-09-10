@@ -306,6 +306,8 @@ class OpenAIToolsAdapter(OpenAIAdapter):
         rules = [
             "First, select a domain with domain.* (files/apps/system/project/git/web).",
             "Then, use the corresponding tools (e.g., files.list).",
+            "To run OS commands, select domain.system and call system.exec_custom with strict JSON (the UI will ask the user to confirm).",
+            "For read-only shell queries, prefer system.exec_ro (allowlisted).",
             "Do not call assistant.final until you have used at least one non-final tool.",
             "When calling tools, arguments must be strict JSON (no prose, no markdown).",
             "Use the exact tool names provided; do not invent new names.",
@@ -1017,6 +1019,15 @@ class OpenAIToolsAdapter(OpenAIAdapter):
             except Exception:
                 should_cancel = None
 
+            # Optional confirmation callback before executing a tool
+            confirm_tool: Optional[Callable[[str, dict[str, Any]], bool]] = None
+            try:
+                ccb = kwargs.get("confirm_tool")
+                if callable(ccb):
+                    confirm_tool = cast(Callable[[str, dict[str, Any]], bool], ccb)
+            except Exception:
+                confirm_tool = None
+
             # Build/augment history
             history: list[ChatCompletionMessageParam] = []
             base_msgs = list(messages or [])
@@ -1335,6 +1346,97 @@ class OpenAIToolsAdapter(OpenAIAdapter):
                     seen = getattr(self, "_seen_tool_calls", set())
                     if key and key in seen:
                         continue
+                    # User confirmation/override hook (e.g., for risky commands or custom streaming)
+                    if confirm_tool is not None:
+                        try:
+                            confirm_res = confirm_tool(name, parsed_args)
+                        except Exception:
+                            confirm_res = False
+                        # If the confirm callback returned a dict with handled=True, treat as already executed
+                        try:
+                            if isinstance(confirm_res, dict) and confirm_res.get("handled"):
+                                result = str(confirm_res.get("result", ""))
+                                steps.append(
+                                    {
+                                        "name": name,
+                                        "arguments": parsed_args,
+                                        "result": str(result),
+                                    }
+                                )
+                                if on_step:
+                                    try:
+                                        on_step(
+                                            {
+                                                "phase": "result",
+                                                "name": name,
+                                                "result": str(result),
+                                            }
+                                        )
+                                    except Exception:
+                                        pass
+                                history.append(
+                                    cast(
+                                        ChatCompletionMessageParam,
+                                        cast(
+                                            object,
+                                            {
+                                                "role": "tool",
+                                                "tool_call_id": tool_call.id,
+                                                "name": name,
+                                                "content": str(result),
+                                            },
+                                        ),
+                                    )
+                                )
+                                # Skip actual dispatch since the CLI handled it
+                                continue
+                        except Exception:
+                            pass
+                        # Else, coerce to boolean to decide approval
+                        approved = bool(confirm_res)
+                        if not approved:
+                            result = json.dumps(
+                                {
+                                    "status": "cancelled",
+                                    "reason": "user_denied",
+                                    "tool": name,
+                                },
+                                ensure_ascii=False,
+                            )
+                            steps.append(
+                                {
+                                    "name": name,
+                                    "arguments": parsed_args,
+                                    "result": str(result),
+                                }
+                            )
+                            if on_step:
+                                try:
+                                    on_step(
+                                        {
+                                            "phase": "result",
+                                            "name": name,
+                                            "result": str(result),
+                                        }
+                                    )
+                                except Exception:
+                                    pass
+                            history.append(
+                                cast(
+                                    ChatCompletionMessageParam,
+                                    cast(
+                                        object,
+                                        {
+                                            "role": "tool",
+                                            "tool_call_id": tool_call.id,
+                                            "name": name,
+                                            "content": str(result),
+                                        },
+                                    ),
+                                )
+                            )
+                            # Skip actual dispatch
+                            continue
                     try:
                         result = self._tools_handler.dispatch(name, parsed_args)
                     except Exception as tool_exc:

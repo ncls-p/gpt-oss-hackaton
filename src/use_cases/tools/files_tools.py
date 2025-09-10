@@ -477,6 +477,44 @@ class FilesToolsHandler(ToolsHandlerPort):
                 },
             },
             {
+                "name": "files.copy_lines",
+                "description": "Copy an inclusive 1-based line range to another file/position (insert).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "src_path": {"type": "string"},
+                        "start_line": {"type": "integer"},
+                        "end_line": {"type": "integer"},
+                        "dst_path": {"type": "string"},
+                        "dst_insert_line": {
+                            "type": "integer",
+                            "description": "1-based line to insert before (append if omitted)",
+                        },
+                    },
+                    "required": ["src_path", "start_line", "end_line", "dst_path"],
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "files.move_lines",
+                "description": "Move an inclusive 1-based line range to another file/position (remove from source).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "src_path": {"type": "string"},
+                        "start_line": {"type": "integer"},
+                        "end_line": {"type": "integer"},
+                        "dst_path": {"type": "string"},
+                        "dst_insert_line": {
+                            "type": "integer",
+                            "description": "1-based line to insert before (append if omitted)",
+                        },
+                    },
+                    "required": ["src_path", "start_line", "end_line", "dst_path"],
+                    "additionalProperties": False,
+                },
+            },
+            {
                 "name": "files.delete",
                 "description": "Delete a file or directory (recursive optional).",
                 "parameters": {
@@ -1351,6 +1389,145 @@ class FilesToolsHandler(ToolsHandlerPort):
                         {"status": "error", "message": str(e), "src": src, "dst": dst},
                         ensure_ascii=False,
                     )
+
+            if name == "files.copy_lines":
+                src_path = _abs_path(arguments.get("src_path") or "")
+                dst_path = _abs_path(arguments.get("dst_path") or "")
+                ok1, src_path = ensure_within_root(src_path)
+                ok2, dst_path = ensure_within_root(dst_path)
+                if not (ok1 and ok2):
+                    raise LLMError(
+                        "Path outside WORKSPACE_ROOT not allowed (set HACK_WORKSPACE_ENFORCE=0)"
+                    )
+                start = int(arguments.get("start_line") or 1)
+                end = int(arguments.get("end_line") or start)
+                insert_line = arguments.get("dst_insert_line")
+                insert_line = int(insert_line) if insert_line is not None else None
+                if start < 1:
+                    start = 1
+                if end < start:
+                    end = start
+                try:
+                    with open(src_path, "r", encoding="utf-8") as f:
+                        src_lines = f.readlines()
+                except FileNotFoundError:
+                    raise LLMError(f"File not found: {src_path}")
+                except UnicodeDecodeError:
+                    raise LLMError("Source file is not valid UTF-8 text")
+                total_src = len(src_lines)
+                s = min(start, total_src + 1)
+                e = min(end, total_src)
+                block = src_lines[s - 1 : e] if s <= e else []
+                # Ensure newline at end of block
+                if block and not block[-1].endswith("\n"):
+                    block[-1] = block[-1] + "\n"
+                # load destination
+                try:
+                    if os.path.exists(dst_path):
+                        with open(dst_path, "r", encoding="utf-8") as f:
+                            dst_lines = f.readlines()
+                    else:
+                        dst_lines = []
+                except UnicodeDecodeError:
+                    raise LLMError("Destination file is not valid UTF-8 text")
+                dst_total = len(dst_lines)
+                if insert_line is None or insert_line > dst_total + 1:
+                    insert_idx = dst_total
+                else:
+                    insert_idx = max(0, insert_line - 1)
+                new_dst = dst_lines[:insert_idx] + block + dst_lines[insert_idx:]
+                os.makedirs(os.path.dirname(dst_path) or ".", exist_ok=True)
+                with open(dst_path, "w", encoding="utf-8") as f:
+                    f.writelines(new_dst)
+                st = os.stat(dst_path)
+                return json.dumps(
+                    {
+                        "status": "ok",
+                        "src_path": src_path,
+                        "dst_path": dst_path,
+                        "copied_lines": len(block),
+                        "dst_insert_line": (insert_idx + 1) if block else (insert_idx + 1),
+                        "dst_size": int(st.st_size),
+                    },
+                    ensure_ascii=False,
+                )
+
+            if name == "files.move_lines":
+                src_path = _abs_path(arguments.get("src_path") or "")
+                dst_path = _abs_path(arguments.get("dst_path") or "")
+                ok1, src_path = ensure_within_root(src_path)
+                ok2, dst_path = ensure_within_root(dst_path)
+                if not (ok1 and ok2):
+                    raise LLMError(
+                        "Path outside WORKSPACE_ROOT not allowed (set HACK_WORKSPACE_ENFORCE=0)"
+                    )
+                start = int(arguments.get("start_line") or 1)
+                end = int(arguments.get("end_line") or start)
+                insert_line = arguments.get("dst_insert_line")
+                insert_line = int(insert_line) if insert_line is not None else None
+                if start < 1:
+                    start = 1
+                if end < start:
+                    end = start
+                try:
+                    with open(src_path, "r", encoding="utf-8") as f:
+                        src_lines = f.readlines()
+                except FileNotFoundError:
+                    raise LLMError(f"File not found: {src_path}")
+                except UnicodeDecodeError:
+                    raise LLMError("Source file is not valid UTF-8 text")
+                total_src = len(src_lines)
+                s = min(start, total_src + 1)
+                e = min(end, total_src)
+                block = src_lines[s - 1 : e] if s <= e else []
+                if block and not block[-1].endswith("\n"):
+                    block[-1] = block[-1] + "\n"
+                # remove block from source
+                new_src = src_lines[: s - 1] + src_lines[e:]
+                # destination
+                same_file = os.path.abspath(src_path) == os.path.abspath(dst_path)
+                try:
+                    if os.path.exists(dst_path):
+                        with open(dst_path, "r", encoding="utf-8") as f:
+                            dst_lines = f.readlines()
+                    else:
+                        dst_lines = []
+                except UnicodeDecodeError:
+                    raise LLMError("Destination file is not valid UTF-8 text")
+                dst_total = len(dst_lines)
+                if insert_line is None or insert_line > dst_total + 1:
+                    insert_idx = dst_total
+                else:
+                    insert_idx = max(0, insert_line - 1)
+                if same_file:
+                    # After removal, lines after 'e' shift left by len(block)
+                    removed = len(block)
+                    if insert_idx >= e:
+                        insert_idx = max(0, insert_idx - removed)
+                    dst_lines = new_src  # moving within same file works on updated base
+                new_dst = dst_lines[:insert_idx] + block + dst_lines[insert_idx:]
+                # write files
+                os.makedirs(os.path.dirname(dst_path) or ".", exist_ok=True)
+                with open(dst_path, "w", encoding="utf-8") as f:
+                    f.writelines(new_dst)
+                if not same_file:
+                    with open(src_path, "w", encoding="utf-8") as f:
+                        f.writelines(new_src)
+                else:
+                    # already wrote dst_path which equals src_path
+                    pass
+                st = os.stat(dst_path)
+                return json.dumps(
+                    {
+                        "status": "ok",
+                        "src_path": src_path,
+                        "dst_path": dst_path,
+                        "moved_lines": len(block),
+                        "dst_insert_line": insert_idx + 1,
+                        "dst_size": int(st.st_size),
+                    },
+                    ensure_ascii=False,
+                )
 
             if name == "files.delete":
                 path = _abs_path(arguments.get("path") or "")

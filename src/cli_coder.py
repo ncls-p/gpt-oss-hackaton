@@ -17,6 +17,7 @@ from rich.markdown import Markdown
 from rich.text import Text
 from rich.padding import Padding
 from rich.panel import Panel
+from rich.live import Live
 from rich.syntax import Syntax
 from rich.table import Table
 
@@ -74,6 +75,9 @@ CODER_PROFILE_SYSTEM = (
     "2) Use files.mkdir and files.write with absolute paths under the user's workspace.\n"
     "3) Do not print code snippets as plain text; write them to files.\n"
     "4) When done, call assistant.final with a short summary.\n"
+    "For executing OS commands or scripts, select 'system' (domain.system) and use system.exec_custom "
+    "with a JSON array 'cmd' (and optionally cwd/timeout/shell). The interactive CLI will request user confirmation.\n"
+    "Prefer system.exec_ro for read-only commands (ls/cat/rg/git).\n"
     "For web questions, select 'web' (domain.web) and use web.scrape with CSS selectors."
 )
 
@@ -620,6 +624,146 @@ def interactive_main(argv: Optional[list[str]] = None) -> int:
                     f"[dim]tool>[/dim] [yellow]{st.icon('err')} {err}[/yellow]"
                 )
 
+        def _confirm_tool(name: str, arguments: dict[str, Any]) -> bool:
+            try:
+                # Only gate custom command execution (potentially dangerous)
+                if name == "system.exec_custom":
+                    import shlex
+
+                    cmd = arguments.get("cmd") or []
+                    cwd = arguments.get("cwd") or os.getcwd()
+                    shell = bool(arguments.get("shell", False))
+                    timeout = int(arguments.get("timeout") or 15)
+                    max_bytes = int(arguments.get("max_bytes") or 20000)
+
+                    if isinstance(cmd, list):
+                        try:
+                            cmd_str = " ".join(shlex.quote(str(x)) for x in cmd)
+                        except Exception:
+                            cmd_str = " ".join(str(x) for x in cmd)
+                    else:
+                        cmd_str = str(cmd)
+
+                    console.print(
+                        f"[yellow]Confirmation requise[/yellow] pour exécuter:\n"
+                        f"  cmd: {cmd_str}\n  cwd: {cwd}\n  shell: {shell}\n  timeout: {timeout}s"
+                    )
+                    console.print("Autoriser l'exécution ? : ", end="")
+                    try:
+                        choice = input().strip().lower()
+                    except EOFError:
+                        choice = ""
+                    if choice not in ("y", "yes", "o", "oui"):
+                        console.print("[yellow]Refusé par l'utilisateur.[/yellow]")
+                        return False
+                    console.print("[green]Autorisé.[/green]")
+
+                    # --- Special real-time display & execution (with panel) ---
+                    import subprocess as sp
+                    import threading as _th
+                    from threading import Lock as _Lock
+
+                    def _quote_cmdline(c: list[str]) -> str:
+                        try:
+                            return " ".join(shlex.quote(str(x)) for x in c)
+                        except Exception:
+                            return " ".join(str(x) for x in c)
+
+                    if shell:
+                        # Prefer provided cmdline when shell=True
+                        header_cmd = str(arguments.get("cmdline") or _quote_cmdline(cmd))
+                        proc = sp.Popen(
+                            header_cmd,
+                            shell=True,
+                            cwd=cwd or None,
+                            stdout=sp.PIPE,
+                            stderr=sp.PIPE,
+                            text=True,
+                            bufsize=1,
+                        )
+                    else:
+                        header_cmd = _quote_cmdline([str(x) for x in cmd])
+                        proc = sp.Popen(
+                            [str(x) for x in cmd],
+                            cwd=cwd or None,
+                            stdout=sp.PIPE,
+                            stderr=sp.PIPE,
+                            text=True,
+                            bufsize=1,
+                        )
+
+                    out_buf: list[str] = []
+                    total_bytes = 0
+
+                    live_lines: list[str] = []
+                    _lock = _Lock()
+
+                    def _render_panel(live_obj: Live) -> None:
+                        # Compose panel body with current lines
+                        body = "\n".join(live_lines) if live_lines else ""
+                        live_obj.update(
+                            Panel(
+                                Padding(body, (0, 1)),
+                                title=f"[cyan]$[/cyan] {header_cmd}",
+                                border_style="cyan",
+                                box=box.ROUNDED,
+                                expand=True,
+                            )
+                        )
+
+                    def _pump(stream, prefix: str, live_obj: Live) -> None:
+                        nonlocal total_bytes
+                        try:
+                            for line in iter(stream.readline, ""):
+                                total_bytes += len(line.encode("utf-8", errors="ignore"))
+                                if total_bytes <= max_bytes:
+                                    text = line.rstrip()
+                                    styled = f"[red]{text}[/red]" if prefix == "stderr" else text
+                                    with _lock:
+                                        live_lines.append(styled)
+                                        _render_panel(live_obj)
+                                out_buf.append(line)
+                        except Exception:
+                            pass
+                        finally:
+                            try:
+                                stream.close()
+                            except Exception:
+                                pass
+
+                    # Live panel to enclose streaming output
+                    with Live(refresh_per_second=20, transient=False) as live:
+                        # Initial empty render with just the header
+                        _render_panel(live)
+                        t_out = _th.Thread(target=_pump, args=(proc.stdout, "stdout", live), daemon=True)  # type: ignore[arg-type]
+                        t_err = _th.Thread(target=_pump, args=(proc.stderr, "stderr", live), daemon=True)  # type: ignore[arg-type]
+                        t_out.start(); t_err.start()
+                        try:
+                            proc.wait(timeout=timeout)
+                        except Exception:
+                            try:
+                                proc.kill()
+                            except Exception:
+                                pass
+                        t_out.join(timeout=1)
+                        t_err.join(timeout=1)
+
+                    rc = proc.returncode if proc.returncode is not None else -1
+                    output = "".join(out_buf)
+                    if len(output.encode("utf-8", errors="ignore")) > max_bytes:
+                        output = output.encode("utf-8")[:max_bytes].decode("utf-8", errors="ignore")
+
+                    result_obj = {"status": "ok", "returncode": rc, "output": output}
+                    try:
+                        result_json = json.dumps(result_obj, ensure_ascii=False)
+                    except Exception:
+                        result_json = str(result_obj)
+                    # Signal to the adapter that the tool has been handled locally
+                    return {"handled": True, "result": result_json}  # type: ignore[return-value]
+            except Exception:
+                return False
+            return True
+
         # Execute one chat turn with tools
         try:
             result = llm_tools.run_chat_turn_with_trace(
@@ -631,6 +775,7 @@ def interactive_main(argv: Optional[list[str]] = None) -> int:
                 tool_max_steps=args.steps,
                 require_final_tool=args.final_required,
                 on_step=_on_step,
+                confirm_tool=_confirm_tool,
                 should_cancel=cancel_event.is_set,  # type: ignore[arg-type]
             )
         except KeyboardInterrupt:

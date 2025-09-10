@@ -41,6 +41,39 @@ class SystemToolsHandler(ToolsHandlerPort):
                 },
             },
             {
+                "name": "system.exec_custom",
+                "description": "Execute a custom command (interactive CLI asks user confirmation).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "cmd": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Program and args, e.g., ['ls','-la']",
+                        },
+                        "cwd": {"type": "string", "description": "Working directory"},
+                        "timeout": {
+                            "type": "integer",
+                            "description": "Seconds timeout (default 15)",
+                        },
+                        "max_bytes": {
+                            "type": "integer",
+                            "description": "Cap output bytes (default 20000)",
+                        },
+                        "shell": {
+                            "type": "boolean",
+                            "description": "Use shell execution (dangerous). Default false",
+                        },
+                        "cmdline": {
+                            "type": "string",
+                            "description": "Command line when shell=true",
+                        },
+                    },
+                    "required": ["cmd"],
+                    "additionalProperties": False,
+                },
+            },
+            {
                 "name": "system.exec_ro",
                 "description": "Execute a read-only command from an allowlist (ls/cat/rg/git).",
                 "parameters": {
@@ -345,6 +378,62 @@ class SystemToolsHandler(ToolsHandlerPort):
                 return json.dumps(
                     {"status": "ok" if ok else "failed"}, ensure_ascii=False
                 )
+
+            if name == "system.exec_custom":
+                import subprocess as sp
+                cmd = arguments.get("cmd") or []
+                if not isinstance(cmd, list) or not cmd:
+                    raise LLMError("Field 'cmd' must be a non-empty array of strings.")
+                shell = bool(arguments.get("shell", False))
+                cmdline = str(arguments.get("cmdline") or "")
+                timeout = int(arguments.get("timeout") or 15)
+                max_bytes = int(arguments.get("max_bytes") or 20000)
+                cwd = str(arguments.get("cwd") or "").strip() or None
+                try:
+                    if shell:
+                        if not cmdline:
+                            # Fall back to joining args when cmdline not provided
+                            try:
+                                import shlex
+
+                                cmdline = " ".join(shlex.quote(str(x)) for x in cmd)
+                            except Exception:
+                                cmdline = " ".join(str(x) for x in cmd)
+                        p = sp.run(
+                            cmdline,
+                            shell=True,
+                            cwd=cwd,
+                            stdout=sp.PIPE,
+                            stderr=sp.PIPE,
+                            text=True,
+                            timeout=timeout,
+                        )
+                    else:
+                        p = sp.run(
+                            [str(x) for x in cmd],
+                            cwd=cwd,
+                            stdout=sp.PIPE,
+                            stderr=sp.PIPE,
+                            text=True,
+                            timeout=timeout,
+                        )
+                    out = (p.stdout or "") + ("\n" + p.stderr if p.stderr else "")
+                    if len(out.encode("utf-8")) > max_bytes:
+                        out = out.encode("utf-8")[:max_bytes].decode(
+                            "utf-8", errors="ignore"
+                        )
+                    return json.dumps(
+                        {
+                            "status": "ok",
+                            "returncode": p.returncode,
+                            "output": out,
+                        },
+                        ensure_ascii=False,
+                    )
+                except Exception as e:
+                    return json.dumps(
+                        {"status": "error", "message": str(e)}, ensure_ascii=False
+                    )
 
             if name == "system.clipboard_set":
                 text = str(arguments.get("text") or "")
