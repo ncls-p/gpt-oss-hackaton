@@ -38,6 +38,22 @@ from PySide6.QtWidgets import (
 
 from src.container import container
 
+# Default system instructions focused on tools and concrete capabilities.
+# Keep it single-line (QLineEdit) but dense, so the assistant avoids generic replies
+# and knows how to list and use its tools.
+DEFAULT_SYSTEM_MESSAGE = (
+    "Tu es un assistant outillé. Sélectionne un domaine via domain.* (files/apps/system/project/git/web) "
+    "puis appelle les outils correspondants: files.*, application.*, system.*, project.*, git.*, web.*. "
+    "Si l'utilisateur demande ce que tu peux faire, appelle d'abord domain.list puis domain.describe pour résumer tes capacités et schémas. "
+    "Pour créer/modifier des fichiers: domain.files → files.mkdir, files.write, files.append, files.write_range (chemins absolus sous le workspace). "
+    "Pour lire/rechercher dans le projet: project.search_text, project.read_range, project.symbols_index, project.find_refs. "
+    "Pour Git (lecture): git.status, git.diff, git.log, git.show, git.blame, git.branch_list, git.current_branch. "
+    "Pour OS: domain.system → privilégie system.exec_ro (ls/cat/rg/git); system.exec_custom est possible mais peut être bloqué par l'UI; system.open_url/open_path/notify/open_terminal/clipboard_*/os_info/resources/etc. "
+    "Pour applications: application.open (nom, bundle id ou chemin). Pour le web: web.scrape, web.links, web.fetch_json, web.readability, web.download, web.post_json. "
+    "Quand tu appelles un outil, fournis des arguments JSON stricts (sans prose). Si un appel échoue, réessaie avec un JSON correct. "
+    "Quand demandé de finir (ou si 'Require assistant.final' est actif), termine en appelant assistant.final avec {\"final_text\": \"...\"}."
+)
+
 from .theme import ThemeName, toggle_theme
 
 
@@ -278,7 +294,15 @@ class MainWindow(QMainWindow):
 
         self.system_edit = QLineEdit(left)
         self.system_edit.setPlaceholderText("You are a computer assistant… (optional)")
-        self.system_edit.setToolTip("System message sent to the model at the start of the conversation")
+        # Prefill with capability-focused instructions to avoid generic answers
+        try:
+            self.system_edit.setText(DEFAULT_SYSTEM_MESSAGE)
+        except Exception:
+            pass
+        self.system_edit.setToolTip(
+            "System message sent to the model at the start of the conversation. "
+            "Includes guidance to use domain.* tools (files/apps/system/project/git/web) and to call assistant.final."
+        )
 
         self.temp_spin = QDoubleSpinBox(left)
         self.temp_spin.setDecimals(2)
