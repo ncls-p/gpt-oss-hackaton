@@ -5,6 +5,7 @@ import html as _html
 import json
 import textwrap
 from pathlib import Path
+import os
 from typing import Any, List, Optional, cast
 
 from PySide6.QtCore import QObject, Qt, QThread, Signal, Slot
@@ -96,6 +97,7 @@ class _ChatWorker(QObject):
         max_tokens: int,
         tool_max_steps: int,
         require_final_tool: bool,
+        allow_exec_custom: bool = False,
     ) -> None:
         super().__init__()
         self.messages = messages or []
@@ -105,6 +107,7 @@ class _ChatWorker(QObject):
         self.max_tokens = max_tokens
         self.tool_max_steps = tool_max_steps
         self.require_final_tool = require_final_tool
+        self.allow_exec_custom = bool(allow_exec_custom)
         # Cooperative cancellation flag
         try:
             from threading import Event
@@ -136,6 +139,22 @@ class _ChatWorker(QObject):
                 except Exception:
                     pass
 
+            def _confirm_tool(name: str, arguments: dict[str, Any]):
+                try:
+                    if name == "system.exec_custom" and not self.allow_exec_custom:
+                        # Intercept and deny for safety
+                        payload = {
+                            "status": "denied",
+                            "message": "system.exec_custom is disabled in UI (Allow exec_custom unchecked)",
+                        }
+                        import json as _json
+
+                        return {"handled": True, "result": _json.dumps(payload, ensure_ascii=False)}
+                except Exception:
+                    pass
+                # Approve all other tools by default
+                return True
+
             result = llm_tools.run_chat_turn_with_trace(
                 messages=self.messages,
                 user_text=self.user_text,
@@ -145,6 +164,7 @@ class _ChatWorker(QObject):
                 tool_max_steps=self.tool_max_steps,
                 require_final_tool=self.require_final_tool,
                 on_step=_emit_step,
+                confirm_tool=_confirm_tool,
                 should_cancel=(
                     self._cancel_event.is_set if self._cancel_event else None
                 ),
@@ -252,7 +272,17 @@ class MainWindow(QMainWindow):
         self.steps_spin.setValue(4)
 
         self.final_required_chk = QCheckBox("Require assistant.final to end", left)
-        self.final_required_chk.setChecked(True)
+        self.final_required_chk.setChecked(False)
+
+        self.allow_exec_custom_chk = QCheckBox("Allow exec_custom (run custom commands)", left)
+        self.allow_exec_custom_chk.setChecked(False)
+
+        self.workspace_safety_chk = QCheckBox("Enforce workspace safety (restrict file ops to WORKSPACE_ROOT)", left)
+        self.workspace_safety_chk.setChecked(False)
+        try:
+            self.workspace_safety_chk.stateChanged.connect(self._on_toggle_workspace_safety)
+        except Exception:
+            pass
 
         run_btn = QPushButton("Send", left)
         run_btn.setObjectName("primary")
@@ -271,6 +301,8 @@ class MainWindow(QMainWindow):
         form.addRow(QLabel("Max tokens:"), self.max_tokens_spin)
         form.addRow(QLabel("Tool steps:"), self.steps_spin)
         form.addRow(self.final_required_chk)
+        form.addRow(self.allow_exec_custom_chk)
+        form.addRow(self.workspace_safety_chk)
         form.addRow(run_btn)
         form.addRow(self.progress)
 
@@ -355,6 +387,12 @@ class MainWindow(QMainWindow):
         outer.setSpacing(12)
         outer.addWidget(splitter)
 
+        # Apply initial workspace safety env based on checkbox (default unchecked -> disabled)
+        try:
+            self._on_toggle_workspace_safety()
+        except Exception:
+            pass
+
     # Slots
     @Slot()
     def _on_toggle_theme(self) -> None:
@@ -408,7 +446,14 @@ class MainWindow(QMainWindow):
         # pass a shallow copy of history to the worker
         messages_copy: List[dict] = list(self._chat_history)
         self._worker = _ChatWorker(
-            messages_copy, user_text, system, temp, max_tokens, steps, final_required
+            messages_copy,
+            user_text,
+            system,
+            temp,
+            max_tokens,
+            steps,
+            final_required,
+            allow_exec_custom=bool(self.allow_exec_custom_chk.isChecked()),
         )
         self._worker.moveToThread(self._thread)
 
@@ -855,3 +900,138 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         return s
+
+    # --- Quick System Controls handlers ---
+    def _append_assistant_text(self, text: str) -> None:
+        try:
+            self._chat_history.append({"role": "assistant", "content": text})
+            self._render_conversation()
+        except Exception:
+            pass
+
+    def _post_tool_result(self, name: str, arguments: dict, result: str) -> None:
+        try:
+            step = {"name": name, "arguments": arguments, "result": result}
+            try:
+                snippet_src = " ".join(result.splitlines())
+            except Exception:
+                snippet_src = str(result)
+            snippet = textwrap.shorten(snippet_src, width=120)
+            item = QListWidgetItem(f"✓ {name} — {snippet}")
+            item.setData(Qt.ItemDataRole.UserRole, step)
+            self.steps_list.addItem(item)
+            self.steps_list.scrollToBottom()
+        except Exception:
+            pass
+        # Also echo to chat for visibility
+        try:
+            pretty = result
+            try:
+                obj = json.loads(result)
+                pretty = json.dumps(obj, ensure_ascii=False, indent=2)
+            except Exception:
+                pass
+            self._append_assistant_text(f"```")
+            self._append_assistant_text(pretty)
+            self._append_assistant_text(f"```")
+        except Exception:
+            pass
+
+    def _sys_handler(self):
+        # Lazy import to avoid UI import costs
+        from src.use_cases.tools.system_tools import SystemToolsHandler
+
+        if not hasattr(self, "_sys_tools_handler"):
+            try:
+                self._sys_tools_handler = SystemToolsHandler()
+            except Exception:
+                self._sys_tools_handler = None
+        return getattr(self, "_sys_tools_handler", None)
+
+    @Slot()
+    def _on_toggle_workspace_safety(self) -> None:
+        try:
+            enforced = bool(self.workspace_safety_chk.isChecked())
+        except Exception:
+            enforced = False
+        try:
+            os.environ["HACK_WORKSPACE_ENFORCE"] = "1" if enforced else "0"
+        except Exception:
+            pass
+
+    @Slot()
+    def _on_sys_set_volume(self) -> None:
+        h = self._sys_handler()
+        if not h:
+            return
+        level = int(getattr(self, "vol_slider", None).value()) if hasattr(self, "vol_slider") else 50
+        try:
+            res = h.dispatch("system.set_volume", {"level": level})
+            self._post_tool_result("system.set_volume", {"level": level}, str(res))
+        except Exception as e:
+            QMessageBox.critical(self, "Volume", str(e))
+
+    @Slot()
+    def _on_sys_set_brightness(self) -> None:
+        h = self._sys_handler()
+        if not h:
+            return
+        level = float(getattr(self, "brightness_spin", None).value()) if hasattr(self, "brightness_spin") else 0.5
+        try:
+            res = h.dispatch("system.set_brightness", {"level": level})
+            self._post_tool_result("system.set_brightness", {"level": level}, str(res))
+        except Exception as e:
+            QMessageBox.critical(self, "Brightness", str(e))
+
+    @Slot()
+    def _on_sys_set_idle(self) -> None:
+        h = self._sys_handler()
+        if not h:
+            return
+        try:
+            enable = bool(self.idle_enable_chk.isChecked())
+            timeout = int(self.idle_timeout_spin.value())
+        except Exception:
+            enable, timeout = False, 300
+        try:
+            res = h.dispatch("system.set_idle", {"enable": enable, "timeout": timeout})
+            self._post_tool_result("system.set_idle", {"enable": enable, "timeout": timeout}, str(res))
+        except Exception as e:
+            QMessageBox.critical(self, "Idle/Sleep", str(e))
+
+    @Slot()
+    def _on_sys_network_info(self) -> None:
+        h = self._sys_handler()
+        if not h:
+            return
+        try:
+            res = h.dispatch("system.network_info", {})
+            self._post_tool_result("system.network_info", {}, str(res))
+        except Exception as e:
+            QMessageBox.critical(self, "Network Info", str(e))
+
+    @Slot()
+    def _on_sys_battery_info(self) -> None:
+        h = self._sys_handler()
+        if not h:
+            return
+        try:
+            res = h.dispatch("system.battery_info", {})
+            self._post_tool_result("system.battery_info", {}, str(res))
+        except Exception as e:
+            QMessageBox.critical(self, "Battery Info", str(e))
+
+    @Slot()
+    def _on_sys_process_list(self) -> None:
+        h = self._sys_handler()
+        if not h:
+            return
+        try:
+            limit = int(self.proc_limit_spin.value()) if hasattr(self, "proc_limit_spin") else 10
+        except Exception:
+            limit = 10
+        try:
+            res = h.dispatch("system.process_list", {"limit": limit})
+            self._post_tool_result("system.process_list", {"limit": limit}, str(res))
+        except Exception as e:
+            QMessageBox.critical(self, "Processes", str(e))

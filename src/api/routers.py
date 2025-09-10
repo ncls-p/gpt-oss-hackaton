@@ -5,7 +5,7 @@ FastAPI router definitions for the API endpoints.
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 
 from src.api.dependencies import (
     get_generate_text_uc,
@@ -159,6 +159,20 @@ def assistant_tools(body: ToolsRequest):
         if not isinstance(llm_tools, OpenAIToolsAdapter):
             raise RuntimeError("Tools-enabled LLM adapter is not available")
 
+        def _confirm_tool(name: str, arguments: dict[str, object]):
+            try:
+                if name == "system.exec_custom" and not bool(body.allow_exec_custom):
+                    import json as _json
+                    payload = {
+                        "status": "denied",
+                        "message": "system.exec_custom denied by API (allow_exec_custom=false)",
+                    }
+                    return {"handled": True, "result": _json.dumps(payload, ensure_ascii=False)}
+            except Exception:
+                pass
+            # Approve all other tools by default
+            return True
+
         result = llm_tools.run_with_trace(
             prompt=body.prompt,
             system_message=body.system_message,
@@ -166,6 +180,7 @@ def assistant_tools(body: ToolsRequest):
             max_tokens=body.max_tokens,
             tool_max_steps=body.tool_max_steps,
             require_final_tool=body.require_final_tool,
+            confirm_tool=_confirm_tool,
         )
 
         # Normalize steps into schema
@@ -179,6 +194,101 @@ def assistant_tools(body: ToolsRequest):
         return ToolsResponse(text=result.get("text", ""), steps=steps)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/assistant/tools/stream")
+def assistant_tools_stream(
+    prompt: str = Query(...),
+    system_message: Optional[str] = Query(None),
+    temperature: float = Query(0.7),
+    max_tokens: int = Query(800),
+    tool_max_steps: int = Query(4),
+    require_final_tool: bool = Query(True),
+    allow_exec_custom: bool = Query(False),
+):
+    """Server-Sent Events (SSE)-style stream of tool steps and final text.
+
+    Emits events:
+    - event: step  data: {phase,name,arguments|result|error}
+    - event: final data: {text, steps}
+    """
+    from queue import Queue, Empty
+    from threading import Thread
+    import json as _json
+
+    # We specifically need the tools-enabled adapter
+    from src.adapters.llm.openai_tools_adapter import OpenAIToolsAdapter
+
+    llm_tools = container.get_llm_tools_adapter()
+    if not isinstance(llm_tools, OpenAIToolsAdapter):
+        raise HTTPException(status_code=500, detail="Tools-enabled LLM adapter is not available")
+
+    q: Queue[str] = Queue()
+
+    def on_step(ev: dict):
+        try:
+            q.put_nowait(f"event: step\n" + "data: " + _json.dumps(ev, ensure_ascii=False) + "\n\n")
+        except Exception:
+            pass
+
+    def confirm_tool(name: str, arguments: dict[str, object]):
+        try:
+            if name == "system.exec_custom" and not bool(allow_exec_custom):
+                payload = {
+                    "status": "denied",
+                    "message": "system.exec_custom denied by API (allow_exec_custom=false)",
+                }
+                return {"handled": True, "result": _json.dumps(payload, ensure_ascii=False)}
+        except Exception:
+            pass
+        # Approve all other tools by default
+        return True
+
+    def worker():
+        try:
+            result = llm_tools.run_chat_turn_with_trace(
+                messages=[],
+                user_text=prompt,
+                system_message=system_message,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                tool_max_steps=tool_max_steps,
+                require_final_tool=require_final_tool,
+                on_step=on_step,
+                confirm_tool=confirm_tool,
+            )
+            q.put_nowait(
+                "event: final\n" + "data: " + _json.dumps({"text": result.get("text",""), "steps": result.get("steps", [])}, ensure_ascii=False) + "\n\n"
+            )
+        except Exception as e:
+            try:
+                q.put_nowait(
+                    "event: error\n" + "data: " + _json.dumps({"error": str(e)}, ensure_ascii=False) + "\n\n"
+                )
+            except Exception:
+                pass
+        finally:
+            try:
+                q.put_nowait("event: done\n" + "data: {}\n\n")
+            except Exception:
+                pass
+
+    Thread(target=worker, daemon=True).start()
+
+    def gen():
+        try:
+            while True:
+                try:
+                    item = q.get(timeout=0.5)
+                except Empty:
+                    continue
+                yield item
+                if item.startswith("event: done"):
+                    break
+        except Exception:
+            return
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
 
 
 @router.get("/ui/tools", response_class=HTMLResponse)
@@ -220,6 +330,10 @@ def tools_ui():
       <input id=\"finalRequired\" type=\"checkbox\" checked />
     </div>
     <div class=\"row\">
+      <label>Allow exec_custom</label>
+      <input id=\"allowExec\" type=\"checkbox\" />
+    </div>
+    <div class=\"row\">
       <button id=\"run\">Run</button>
     </div>
     <div class=\"row\">
@@ -238,7 +352,7 @@ def tools_ui():
         const res = await fetch('/assistant/tools', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ prompt, system_message: system, temperature, max_tokens, tool_max_steps, require_final_tool: document.getElementById('finalRequired').checked })
+          body: JSON.stringify({ prompt, system_message: system, temperature, max_tokens, tool_max_steps, require_final_tool: document.getElementById('finalRequired').checked, allow_exec_custom: document.getElementById('allowExec').checked })
         });
         const data = await res.json();
         if (!res.ok) {

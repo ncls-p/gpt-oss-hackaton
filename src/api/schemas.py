@@ -97,6 +97,10 @@ class ToolsRequest(BaseModel):
     require_final_tool: Optional[bool] = Field(
         True, description="If true, require calling assistant.final to end"
     )
+    allow_exec_custom: Optional[bool] = Field(
+        False,
+        description="If false, system.exec_custom is intercepted and denied for safety",
+    )
 
 
 class ToolsResponse(BaseModel):

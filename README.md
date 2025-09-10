@@ -105,9 +105,27 @@ Run a native desktop interface (no browser required):
 Features:
 
 - Prompt, system message, temperature, max tokens, tool steps, and “require final tool” toggle
+- Allow/deny `system.exec_custom` (safety switch)
 - Run actions without blocking (background thread)
 - Final assistant text viewer and a steps panel (double-click to inspect)
 - Save results to JSON
+- Quick System Controls: volume, brightness, idle, network/battery/process info
+
+#### Interactive Coder (CLI)
+
+Run the interactive terminal coder with tool tracing and optional command execution streaming:
+
+- With `uv` (recommended):
+
+  ```bash
+  uv run hack-coder
+  ```
+
+Highlights:
+
+- Rich TUI with Markdown rendering and step-by-step tool trace
+- Optional confirmation + live output streaming for `system.exec_custom`
+- Save/restore conversation and steps
 
 ### Examples
 
@@ -356,6 +374,22 @@ Notes:
 - "Files" tools enforce a safety boundary: paths constrained to `HACK_WORKSPACE_ROOT` (configurable), unless `HACK_WORKSPACE_ENFORCE=0`.
 - Several tools have size guards (e.g., reads ~100KB, diffs/outputs ~20KB) for stability.
 - Hardware/system controls are best-effort and platform-dependent; some require system utilities to be installed (`amixer`, `xrandr`, `xset`, etc.).
+
+##### Tools Assistant Streaming (SSE)
+
+Stream tool steps and the final message in real time via Server-Sent Events:
+
+```
+GET /assistant/tools/stream?prompt=...&temperature=0.7&tool_max_steps=4&require_final_tool=true&allow_exec_custom=false
+Accept: text/event-stream
+```
+
+Events:
+- `event: step` with `{phase,name,arguments|result|error}`
+- `event: final` with `{text,steps}`
+- `event: done`
+
+Use the minimal web UI at `/ui/tools` (checkbox “Allow exec_custom”) or call the JSON endpoint `/assistant/tools` with `allow_exec_custom` to gate custom command execution server-side.
 
 ```bash
 curl -X POST "http://localhost:8000/assistant/tools" \
